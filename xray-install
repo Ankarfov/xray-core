@@ -43,6 +43,13 @@ cat << EOF > /usr/local/etc/xray/config.json
                     "geosite:category-ads-all"
                 ],
                 "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "protocol": [
+                    "bittorrent"
+                ],
+                "outboundTag": "block"
             }
         ]
     },
@@ -85,7 +92,9 @@ cat << EOF > /usr/local/etc/xray/config.json
                 "enabled": true,
                 "destOverride": [
                     "http",
-                    "tls"
+                    "tls",
+                    "quic",
+                    "fakedns"
                 ]
             }
         }
