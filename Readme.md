@@ -23,6 +23,12 @@
 wget -qO- https://raw.githubusercontent.com/Ankarfov/xray-core/refs/heads/main/xray-install | bash
 ```
 
+Чтобы установить выход через CloudFlare, используйте эту команду
+
+```sh
+wget -qO- https://raw.githubusercontent.com/Ankarfov/xray-core/refs/heads/main/warp-install | bash
+```
+
 ## Команды для управления пользователями
 
 **Вывести список всех клиентов:**
