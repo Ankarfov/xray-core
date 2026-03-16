@@ -130,7 +130,7 @@ ip=$(curl -4 -s icanhazip.com)
 
 tcp_port=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .port' "$CONFIG")
 tcp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
-tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#tcp-$email"
+tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#$email"
 
 echo ""
 echo "=== TCP (основной) ==="
@@ -141,7 +141,7 @@ echo "$tcp_link" | qrencode -t ansiutf8
 
 xhttp_port=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .port' "$CONFIG")
 xhttp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
-xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#xhttp-$email"
+xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$email"
 
 echo ""
 echo "=== XHTTP (резервный) ==="
@@ -222,7 +222,7 @@ ip=$(timeout 3 curl -4 -s icanhazip.com)
 
 tcp_port=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .port' "$CONFIG")
 tcp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
-tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#tcp-$selected_email"
+tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#$selected_email"
 
 echo ""
 echo "=== TCP (основной) ==="
@@ -233,7 +233,7 @@ echo "$tcp_link" | qrencode -t ansiutf8
 
 xhttp_port=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .port' "$CONFIG")
 xhttp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
-xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#xhttp-$selected_email"
+xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$selected_email"
 
 echo ""
 echo "=== XHTTP (резервный) ==="
@@ -257,7 +257,7 @@ ip=$(timeout 3 curl -4 -s icanhazip.com)
 
 tcp_port=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .port' "$CONFIG")
 tcp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
-tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#tcp-$ip"
+tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#$ip"
 
 echo ""
 echo "=== TCP (основной) ==="
@@ -268,7 +268,7 @@ echo "$tcp_link" | qrencode -t ansiutf8
 
 xhttp_port=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .port' "$CONFIG")
 xhttp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
-xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#xhttp-$ip"
+xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$ip"
 
 echo ""
 echo "=== XHTTP (резервный) ==="
