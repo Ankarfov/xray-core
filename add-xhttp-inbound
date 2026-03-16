@@ -1,0 +1,298 @@
+#!/bin/bash
+
+# Проверка root
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Скрипт нужно запускать от root"
+  exit 1
+fi
+
+CONFIG="/usr/local/etc/xray/config.json"
+KEYS="/usr/local/etc/xray/.keys"
+
+if [ ! -f "$CONFIG" ]; then
+  echo "Ошибка: конфиг Xray не найден."
+  exit 1
+fi
+
+if [ ! -f "$KEYS" ]; then
+  echo "Ошибка: файл ключей не найден."
+  exit 1
+fi
+
+# Проверяем, нет ли уже XHTTP inbound
+if jq -e '.inbounds[] | select(.streamSettings.network == "xhttp")' "$CONFIG" >/dev/null 2>&1; then
+  echo "XHTTP inbound уже существует в конфиге."
+  exit 1
+fi
+
+# Читаем ключи
+PRIVKEY=$(awk -F': ' '/PrivateKey/ {print $2}' "$KEYS")
+SHORTSID=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
+
+if [ -z "$PRIVKEY" ] || [ -z "$SHORTSID" ]; then
+  echo "Ошибка: не удалось прочитать ключи."
+  exit 1
+fi
+
+# Читаем настройки из основного inbound
+SNI_ARRAY=$(jq '.inbounds[0].streamSettings.realitySettings.serverNames' "$CONFIG")
+DEST=$(jq -r '.inbounds[0].streamSettings.realitySettings.dest // .inbounds[0].streamSettings.realitySettings.target' "$CONFIG")
+
+# Читаем клиентов (без flow для XHTTP)
+CLIENTS=$(jq '[.inbounds[0].settings.clients[] | {email, id} + {"flow": ""}]' "$CONFIG")
+
+XHTTP_PORT=8443
+
+echo "Добавляю XHTTP inbound на порт $XHTTP_PORT..."
+
+# Добавляем tag к первому inbound, если его нет
+FIRST_TAG=$(jq -r '.inbounds[0].tag // empty' "$CONFIG")
+if [ -z "$FIRST_TAG" ]; then
+  jq '.inbounds[0].tag = "vless-tcp"' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+fi
+
+# Добавляем XHTTP inbound
+jq --argjson clients "$CLIENTS" \
+   --arg privkey "$PRIVKEY" \
+   --arg shortsid "$SHORTSID" \
+   --argjson sni_array "$SNI_ARRAY" \
+   --arg dest "$DEST" \
+   --argjson port "$XHTTP_PORT" \
+   '.inbounds += [{
+      "listen": "0.0.0.0",
+      "port": $port,
+      "protocol": "vless",
+      "tag": "vless-xhttp",
+      "settings": {
+          "clients": $clients,
+          "decryption": "none"
+      },
+      "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {
+              "path": "/"
+          },
+          "security": "reality",
+          "realitySettings": {
+              "show": false,
+              "dest": $dest,
+              "xver": 0,
+              "serverNames": $sni_array,
+              "privateKey": $privkey,
+              "minClientVer": "",
+              "maxClientVer": "",
+              "maxTimeDiff": 0,
+              "shortIds": [$shortsid]
+          }
+      },
+      "sniffing": {
+          "enabled": true,
+          "destOverride": ["http", "tls", "quic", "fakedns"]
+      }
+   }]' "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+
+# Обновляем newuser — добавляет в оба inbound
+cat << 'EOF' > /usr/local/bin/newuser
+#!/bin/bash
+CONFIG="/usr/local/etc/xray/config.json"
+KEYS="/usr/local/etc/xray/.keys"
+
+read -p "Введите имя пользователя (email): " email
+
+if [[ -z "$email" || "$email" == *" "* ]]; then
+    echo "Имя пользователя не может быть пустым или содержать пробелы."
+    exit 1
+fi
+
+existing=$(jq --arg email "$email" '.inbounds[0].settings.clients[] | select(.email == $email)' "$CONFIG")
+if [[ -n "$existing" ]]; then
+    echo "Пользователь с таким именем уже существует."
+    exit 1
+fi
+
+uuid=$(xray uuid)
+
+# TCP inbound (с flow)
+jq --arg email "$email" --arg uuid "$uuid" \
+   '(.inbounds[] | select(.tag == "vless-tcp") | .settings.clients) += [{"email": $email, "id": $uuid, "flow": "xtls-rprx-vision"}]' \
+   "$CONFIG" > tmp.json && mv tmp.json "$CONFIG"
+
+# XHTTP inbound (без flow)
+jq --arg email "$email" --arg uuid "$uuid" \
+   '(.inbounds[] | select(.tag == "vless-xhttp") | .settings.clients) += [{"email": $email, "id": $uuid, "flow": ""}]' \
+   "$CONFIG" > tmp.json && mv tmp.json "$CONFIG"
+
+systemctl restart xray
+
+pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
+sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
+ip=$(curl -4 -s icanhazip.com)
+
+tcp_port=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .port' "$CONFIG")
+tcp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
+tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#tcp-$email"
+
+echo ""
+echo "=== TCP (основной) ==="
+echo "$tcp_link"
+echo ""
+echo "QR-код:"
+echo "$tcp_link" | qrencode -t ansiutf8
+
+xhttp_port=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .port' "$CONFIG")
+xhttp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
+xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#xhttp-$email"
+
+echo ""
+echo "=== XHTTP (резервный) ==="
+echo "$xhttp_link"
+echo ""
+echo "QR-код:"
+echo "$xhttp_link" | qrencode -t ansiutf8
+EOF
+chmod +x /usr/local/bin/newuser
+
+# Обновляем rmuser — удаляет из всех inbound
+cat << 'EOF' > /usr/local/bin/rmuser
+#!/bin/bash
+CONFIG="/usr/local/etc/xray/config.json"
+emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
+
+if [[ ${#emails[@]} -eq 0 ]]; then
+    echo "Нет клиентов для удаления."
+    exit 1
+fi
+
+echo "Список клиентов:"
+for i in "${!emails[@]}"; do
+    echo "$((i+1)). ${emails[$i]}"
+done
+
+read -p "Введите номер клиента для удаления: " choice
+
+if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#emails[@]} )); then
+    echo "Ошибка: номер должен быть от 1 до ${#emails[@]}"
+    exit 1
+fi
+
+selected_email="${emails[$((choice - 1))]}"
+
+INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
+for (( i=0; i<INBOUND_COUNT; i++ )); do
+    jq --argjson idx "$i" --arg email "$selected_email" \
+       '(.inbounds[$idx].settings.clients) |= map(select(.email != $email))' \
+       "$CONFIG" > tmp && mv tmp "$CONFIG"
+done
+
+systemctl restart xray
+echo "Клиент $selected_email удалён."
+EOF
+chmod +x /usr/local/bin/rmuser
+
+# sharelink — ссылки TCP + XHTTP для выбранного клиента
+cat << 'EOF' > /usr/local/bin/sharelink
+#!/bin/bash
+CONFIG="/usr/local/etc/xray/config.json"
+KEYS="/usr/local/etc/xray/.keys"
+
+emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
+
+if [[ ${#emails[@]} -eq 0 ]]; then
+    echo "Нет клиентов."
+    exit 1
+fi
+
+for i in "${!emails[@]}"; do
+   echo "$((i + 1)). ${emails[$i]}"
+done
+
+read -p "Выберите клиента: " client
+
+if ! [[ "$client" =~ ^[0-9]+$ ]] || (( client < 1 || client > ${#emails[@]} )); then
+    echo "Ошибка: номер должен быть от 1 до ${#emails[@]}"
+    exit 1
+fi
+
+selected_email="${emails[$((client - 1))]}"
+
+uuid=$(jq -r --arg email "$selected_email" '.inbounds[0].settings.clients[] | select(.email == $email) | .id' "$CONFIG")
+pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
+sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
+ip=$(timeout 3 curl -4 -s icanhazip.com)
+
+tcp_port=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .port' "$CONFIG")
+tcp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
+tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#tcp-$selected_email"
+
+echo ""
+echo "=== TCP (основной) ==="
+echo "$tcp_link"
+echo ""
+echo "QR-код:"
+echo "$tcp_link" | qrencode -t ansiutf8
+
+xhttp_port=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .port' "$CONFIG")
+xhttp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
+xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#xhttp-$selected_email"
+
+echo ""
+echo "=== XHTTP (резервный) ==="
+echo "$xhttp_link"
+echo ""
+echo "QR-код:"
+echo "$xhttp_link" | qrencode -t ansiutf8
+EOF
+chmod +x /usr/local/bin/sharelink
+
+# mainuser — обновляем для двух ссылок
+cat << 'EOF' > /usr/local/bin/mainuser
+#!/bin/bash
+CONFIG="/usr/local/etc/xray/config.json"
+KEYS="/usr/local/etc/xray/.keys"
+
+uuid=$(awk -F': ' '/uuid/ {print $2}' "$KEYS")
+pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
+sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
+ip=$(timeout 3 curl -4 -s icanhazip.com)
+
+tcp_port=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .port' "$CONFIG")
+tcp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-tcp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
+tcp_link="vless://$uuid@$ip:$tcp_port?security=reality&sni=$tcp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=xtls-rprx-vision&encryption=none#tcp-$ip"
+
+echo ""
+echo "=== TCP (основной) ==="
+echo "$tcp_link"
+echo ""
+echo "QR-код:"
+echo "$tcp_link" | qrencode -t ansiutf8
+
+xhttp_port=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .port' "$CONFIG")
+xhttp_sni=$(jq -r '.inbounds[] | select(.tag == "vless-xhttp") | .streamSettings.realitySettings.serverNames[0]' "$CONFIG")
+xhttp_link="vless://$uuid@$ip:$xhttp_port?security=reality&path=%2F&mode=auto&sni=$xhttp_sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#xhttp-$ip"
+
+echo ""
+echo "=== XHTTP (резервный) ==="
+echo "$xhttp_link"
+echo ""
+echo "QR-код:"
+echo "$xhttp_link" | qrencode -t ansiutf8
+EOF
+chmod +x /usr/local/bin/mainuser
+
+# Перезапуск
+systemctl restart xray
+
+if systemctl is-active --quiet xray; then
+  echo ""
+  echo "=============================="
+  echo "XHTTP inbound добавлен на порт $XHTTP_PORT"
+  echo "=============================="
+  echo ""
+  echo "Обновлены команды: mainuser, newuser, rmuser, sharelink"
+  echo "Теперь все команды выводят ссылки для обоих транспортов."
+  echo ""
+  echo "Не забудьте открыть порт $XHTTP_PORT в файрволе!"
+else
+  echo "Ошибка: Xray не запустился. Проверьте конфиг:"
+  echo "  xray run -test -c $CONFIG"
+fi
