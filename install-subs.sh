@@ -1,30 +1,26 @@
 #!/bin/bash
 
-# Проверка root
 if [ "$(id -u)" -ne 0 ]; then
   echo "Скрипт нужно запускать от root"
   exit 1
 fi
 
 CONFIG="/usr/local/etc/xray/config.json"
-KEYS="/usr/local/etc/xray/.keys"
 
 if [ ! -f "$CONFIG" ]; then
   echo "Ошибка: конфиг Xray не найден."
   exit 1
 fi
 
-# Устанавливаем git если нет
 if ! command -v git &>/dev/null; then
     apt install git -y
 fi
 
-# Создаём файл маппинга если нет
 touch /usr/local/etc/xray/.submap
 
-echo "Устанавливаю команды для управления подписками..."
+echo "Устанавливаю команды..."
 
-# editrepo
+# === editrepo ===
 cat << 'EOF' > /usr/local/bin/editrepo
 #!/bin/bash
 REPO_FILE="/usr/local/etc/xray/.repo"
@@ -46,7 +42,6 @@ fi
 read -p "GitHub репозиторий (user/repo): " repo
 read -p "GitHub токен: " token
 read -p "URL сайта (например https://mysite.netlify.app): " site_url
-
 site_url="${site_url%/}"
 
 cat > "$REPO_FILE" << CONF
@@ -61,16 +56,14 @@ echo "Настройки сохранены."
 EOF
 chmod +x /usr/local/bin/editrepo
 
-# _gen_sub — внутренняя функция генерации подписки
-cat << 'GENEOF' > /usr/local/bin/_gen_sub
+# === _gen_sub ===
+cat << 'EOF' > /usr/local/bin/_gen_sub
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
 KEYS="/usr/local/etc/xray/.keys"
 
 email="$1"
-if [ -z "$email" ]; then
-    exit 1
-fi
+if [ -z "$email" ]; then exit 1; fi
 
 pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
 sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
@@ -85,9 +78,7 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     uuid=$(jq -r --argjson idx "$i" --arg email "$email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .id' "$CONFIG")
     flow=$(jq -r --argjson idx "$i" --arg email "$email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .flow // ""' "$CONFIG")
 
-    if [ -z "$uuid" ]; then
-        continue
-    fi
+    if [ -z "$uuid" ]; then continue; fi
 
     if [ "$network" = "tcp" ]; then
         link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$email"
@@ -105,11 +96,11 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     fi
 done
 
-echo -e "$links" | base64 -w 0
-GENEOF
+echo -e "$links"
+EOF
 chmod +x /usr/local/bin/_gen_sub
 
-# pushsubs
+# === pushsubs ===
 cat << 'EOF' > /usr/local/bin/pushsubs
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -124,7 +115,45 @@ fi
 source "$REPO_FILE"
 
 if [ -z "$repo" ] || [ -z "$token" ]; then
-    echo "Неполные настройки репозитория. Выполните editrepo."
+    echo "Неполные настройки. Выполните editrepo."
+    exit 1
+fi
+
+emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
+
+if [[ ${#emails[@]} -eq 0 ]]; then
+    echo "Нет клиентов."
+    exit 1
+fi
+
+echo ""
+echo "Список клиентов:"
+for i in "${!emails[@]}"; do
+    echo "$((i+1)). ${emails[$i]}"
+done
+echo "a. Все пользователи"
+echo ""
+read -p "Выберите: " choice
+
+selected_emails=()
+if [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
+    selected_emails=("${emails[@]}")
+elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#emails[@]} )); then
+    selected_emails=("${emails[$((choice - 1))]}")
+else
+    echo "Ошибка: неверный выбор."
+    exit 1
+fi
+
+echo ""
+echo "Режим:"
+echo "1. Перезаписать (только ссылки этого сервера)"
+echo "2. Дописать (добавить ссылки к существующим)"
+echo ""
+read -p "Выберите режим (1/2): " mode
+
+if [ "$mode" != "1" ] && [ "$mode" != "2" ]; then
+    echo "Ошибка: выберите 1 или 2."
     exit 1
 fi
 
@@ -141,29 +170,30 @@ fi
 cd "$WORK_DIR"
 git config user.email "xray@server"
 git config user.name "xray"
-
-# Удаляем старые файлы подписок
-find "$WORK_DIR" -maxdepth 1 -type f ! -name '.gitkeep' -delete
-
-# Сохраняем старый маппинг
 cp "$SUBMAP" /usr/local/etc/xray/.submap.old 2>/dev/null
 
-emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
-
-> "$SUBMAP"
-
-for email in "${emails[@]}"; do
-    existing_file=$(grep "^${email}=" /usr/local/etc/xray/.submap.old 2>/dev/null | cut -d= -f2)
+for email in "${selected_emails[@]}"; do
+    existing_file=$(grep "^${email}=" "$SUBMAP" 2>/dev/null | cut -d= -f2)
     if [ -n "$existing_file" ]; then
         filename="$existing_file"
     else
         filename="$(openssl rand -hex 10).txt"
+        echo "${email}=${filename}" >> "$SUBMAP"
     fi
 
-    sub_content=$(/usr/local/bin/_gen_sub "$email")
-    echo "$sub_content" > "${WORK_DIR}/${filename}"
+    new_links=$(/usr/local/bin/_gen_sub "$email")
 
-    echo "${email}=${filename}" >> "$SUBMAP"
+    if [ "$mode" = "2" ] && [ -f "${WORK_DIR}/${filename}" ]; then
+        existing_links=$(base64 -d "${WORK_DIR}/${filename}" 2>/dev/null || echo "")
+        if [ -n "$existing_links" ]; then
+            combined="${existing_links}\n${new_links}"
+        else
+            combined="$new_links"
+        fi
+        echo -e "$combined" | base64 -w 0 > "${WORK_DIR}/${filename}"
+    else
+        echo -e "$new_links" | base64 -w 0 > "${WORK_DIR}/${filename}"
+    fi
 done
 
 cp "$SUBMAP" /usr/local/etc/xray/.submap.old
@@ -174,6 +204,7 @@ git commit -m "update subs" 2>/dev/null
 if [ $? -eq 0 ]; then
     git push 2>/dev/null
     if [ $? -eq 0 ]; then
+        echo ""
         echo "Подписки обновлены."
     else
         echo "Ошибка при пуше."
@@ -186,7 +217,7 @@ rm -rf "$WORK_DIR"
 EOF
 chmod +x /usr/local/bin/pushsubs
 
-# sharesubs
+# === sharesubs ===
 cat << 'EOF' > /usr/local/bin/sharesubs
 #!/bin/bash
 REPO_FILE="/usr/local/etc/xray/.repo"
@@ -203,19 +234,47 @@ if [ ! -f "$SUBMAP" ] || [ ! -s "$SUBMAP" ]; then
 fi
 
 source "$REPO_FILE"
+mapfile -t entries < "$SUBMAP"
+
+if [[ ${#entries[@]} -eq 0 ]]; then
+    echo "Нет подписок."
+    exit 1
+fi
 
 echo ""
-echo "Ссылки на подписки:"
+echo "Список клиентов:"
+for i in "${!entries[@]}"; do
+    email=$(echo "${entries[$i]}" | cut -d= -f1)
+    echo "$((i+1)). $email"
+done
+echo "a. Все пользователи"
 echo ""
-while IFS='=' read -r email filename; do
+read -p "Выберите: " choice
+
+echo ""
+if [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
+    for entry in "${entries[@]}"; do
+        email=$(echo "$entry" | cut -d= -f1)
+        filename=$(echo "$entry" | cut -d= -f2)
+        echo "$email:"
+        echo "  ${site_url}/${filename}"
+        echo ""
+    done
+elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#entries[@]} )); then
+    entry="${entries[$((choice - 1))]}"
+    email=$(echo "$entry" | cut -d= -f1)
+    filename=$(echo "$entry" | cut -d= -f2)
     echo "$email:"
     echo "  ${site_url}/${filename}"
     echo ""
-done < "$SUBMAP"
+else
+    echo "Ошибка: неверный выбор."
+    exit 1
+fi
 EOF
 chmod +x /usr/local/bin/sharesubs
 
-# Обновляем newuser — без QR, с автопушем
+# === newuser (без QR) ===
 cat << 'EOF' > /usr/local/bin/newuser
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -251,17 +310,17 @@ done
 
 systemctl restart xray
 echo "Пользователь $email создан."
-
-if [ -f /usr/local/etc/xray/.repo ]; then
-    pushsubs
-fi
+echo "Используйте pushsubs для обновления подписок."
 EOF
 chmod +x /usr/local/bin/newuser
 
-# Обновляем rmuser — с автопушем
+# === rmuser ===
 cat << 'EOF' > /usr/local/bin/rmuser
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
+REPO_FILE="/usr/local/etc/xray/.repo"
+SUBMAP="/usr/local/etc/xray/.submap"
+
 emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
 
 if [[ ${#emails[@]} -eq 0 ]]; then
@@ -290,7 +349,8 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
        "$CONFIG" > tmp && mv tmp "$CONFIG"
 done
 
-SUBMAP="/usr/local/etc/xray/.submap"
+sub_filename=$(grep "^${selected_email}=" "$SUBMAP" 2>/dev/null | cut -d= -f2)
+
 if [ -f "$SUBMAP" ]; then
     sed -i "/^${selected_email}=/d" "$SUBMAP"
     cp "$SUBMAP" /usr/local/etc/xray/.submap.old
@@ -299,20 +359,121 @@ fi
 systemctl restart xray
 echo "Клиент $selected_email удалён."
 
-if [ -f /usr/local/etc/xray/.repo ]; then
-    pushsubs
+if [ -n "$sub_filename" ] && [ -f "$REPO_FILE" ]; then
+    source "$REPO_FILE"
+    WORK_DIR="/tmp/xray-subs-work"
+    rm -rf "$WORK_DIR"
+    git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
+    if [ $? -eq 0 ]; then
+        cd "$WORK_DIR"
+        git config user.email "xray@server"
+        git config user.name "xray"
+        rm -f "${WORK_DIR}/${sub_filename}"
+        git add -A
+        git commit -m "remove $selected_email" 2>/dev/null
+        git push 2>/dev/null && echo "Подписка удалена из репозитория."
+    fi
+    rm -rf "$WORK_DIR"
 fi
 EOF
 chmod +x /usr/local/bin/rmuser
 
+# === exportusers ===
+cat << 'EOF' > /usr/local/bin/exportusers
+#!/bin/bash
+CONFIG="/usr/local/etc/xray/config.json"
+KEYS="/usr/local/etc/xray/.keys"
+EXPORT_DIR="/tmp/xray-export"
+
+rm -rf "$EXPORT_DIR"
+mkdir -p "$EXPORT_DIR"
+
+jq '.inbounds[0].settings.clients' "$CONFIG" > "$EXPORT_DIR/clients.json"
+cp "$KEYS" "$EXPORT_DIR/.keys"
+[ -f /usr/local/etc/xray/.submap ] && cp /usr/local/etc/xray/.submap "$EXPORT_DIR/.submap"
+
+ARCHIVE="$HOME/xray-users-$(date +%Y%m%d-%H%M%S).tar.gz"
+tar -czf "$ARCHIVE" -C "$EXPORT_DIR" .
+rm -rf "$EXPORT_DIR"
+
+echo ""
+echo "Экспорт завершён! Файл: $ARCHIVE"
+echo "  scp $ARCHIVE root@NEW_SERVER_IP:~/"
+echo "  importusers ~/$(basename $ARCHIVE)"
+EOF
+chmod +x /usr/local/bin/exportusers
+
+# === importusers ===
+cat << 'EOF' > /usr/local/bin/importusers
+#!/bin/bash
+CONFIG="/usr/local/etc/xray/config.json"
+KEYS="/usr/local/etc/xray/.keys"
+
+if [[ -z "$1" ]]; then
+    echo "Использование: importusers <путь_к_архиву>"
+    exit 1
+fi
+
+if [[ ! -f "$1" ]]; then
+    echo "Ошибка: файл $1 не найден"
+    exit 1
+fi
+
+IMPORT_DIR="/tmp/xray-import"
+rm -rf "$IMPORT_DIR"
+mkdir -p "$IMPORT_DIR"
+tar -xzf "$1" -C "$IMPORT_DIR"
+
+if [[ ! -f "$IMPORT_DIR/clients.json" || ! -f "$IMPORT_DIR/.keys" ]]; then
+    echo "Ошибка: архив повреждён"
+    rm -rf "$IMPORT_DIR"
+    exit 1
+fi
+
+CLIENT_COUNT=$(jq 'length' "$IMPORT_DIR/clients.json")
+echo "Найдено клиентов: $CLIENT_COUNT"
+
+INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
+for (( i=0; i<INBOUND_COUNT; i++ )); do
+    network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
+    if [ "$network" = "tcp" ]; then
+        CLIENTS=$(jq '[.[] | . + {"flow": "xtls-rprx-vision"}]' "$IMPORT_DIR/clients.json")
+    else
+        CLIENTS=$(jq '[.[] | {email, id} + {"flow": ""}]' "$IMPORT_DIR/clients.json")
+    fi
+    jq --argjson idx "$i" --argjson clients "$CLIENTS" \
+       '.inbounds[$idx].settings.clients = $clients' \
+       "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+done
+
+cp "$IMPORT_DIR/.keys" "$KEYS"
+[ -f "$IMPORT_DIR/.submap" ] && cp "$IMPORT_DIR/.submap" /usr/local/etc/xray/.submap && cp "$IMPORT_DIR/.submap" /usr/local/etc/xray/.submap.old
+
+PRIVKEY=$(awk -F': ' '/PrivateKey/ {print $2}' "$KEYS")
+SHORTSID=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
+
+for (( i=0; i<INBOUND_COUNT; i++ )); do
+    jq --argjson idx "$i" --arg pk "$PRIVKEY" --arg sid "$SHORTSID" \
+       '.inbounds[$idx].streamSettings.realitySettings.privateKey = $pk |
+        .inbounds[$idx].streamSettings.realitySettings.shortIds = [$sid]' \
+       "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
+done
+
+rm -rf "$IMPORT_DIR"
+systemctl restart xray
+echo "Импорт завершён! Используйте pushsubs для обновления подписок."
+EOF
+chmod +x /usr/local/bin/importusers
+
 echo ""
 echo "=============================="
-echo "Команды установлены:"
+echo "Установлены команды:"
 echo "  editrepo  — настройка репозитория и токена"
-echo "  pushsubs  — обновить подписки"
+echo "  pushsubs  — обновить подписки (выбор пользователей + режим)"
 echo "  sharesubs — показать ссылки на подписки"
+echo "  exportusers / importusers"
 echo ""
-echo "Также обновлены: newuser, rmuser"
+echo "Обновлены: newuser (без QR), rmuser (с удалением подписки)"
 echo ""
 echo "Выполните editrepo для начала работы."
 echo "=============================="
