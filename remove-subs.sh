@@ -7,18 +7,17 @@ fi
 
 echo "Удаляю команды подписок..."
 
-# Удаляем команды подписок
 rm -f /usr/local/bin/editrepo
 rm -f /usr/local/bin/pushsubs
 rm -f /usr/local/bin/sharesubs
 rm -f /usr/local/bin/_gen_sub
-
-# Удаляем файлы данных
+rm -f /usr/local/bin/exportusers
+rm -f /usr/local/bin/importusers
 rm -f /usr/local/etc/xray/.repo
 rm -f /usr/local/etc/xray/.submap
 rm -f /usr/local/etc/xray/.submap.old
 
-# Возвращаем newuser — без автопуша, с QR и ссылками
+# === newuser с QR ===
 cat << 'EOF' > /usr/local/bin/newuser
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -90,7 +89,7 @@ done
 EOF
 chmod +x /usr/local/bin/newuser
 
-# Возвращаем rmuser — без автопуша
+# === rmuser без автопуша ===
 cat << 'EOF' > /usr/local/bin/rmuser
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -129,5 +128,5 @@ chmod +x /usr/local/bin/rmuser
 
 echo ""
 echo "Откат завершён."
-echo "Удалены: editrepo, pushsubs, sharesubs"
+echo "Удалены: editrepo, pushsubs, sharesubs, exportusers, importusers"
 echo "Восстановлены: newuser (с QR), rmuser (без автопуша)"
