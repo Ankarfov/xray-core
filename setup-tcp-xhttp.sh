@@ -17,7 +17,6 @@ sysctl -p
 echo "bbr включен"
 fi
 
-# Устанавливаем ядро Xray
 bash -c "$(curl -4 -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 [ -f /usr/local/etc/xray/.keys ] && rm /usr/local/etc/xray/.keys
 touch /usr/local/etc/xray/.keys
@@ -29,153 +28,56 @@ export uuid=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/uuid/ {print $2}')
 export privatkey=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/PrivateKey/ {print $2}')
 export shortsid=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/shortsid/ {print $2}')
 
-# Создаем файл конфигурации Xray
 cat << EOF > /usr/local/etc/xray/config.json
 {
-    "log": {
-        "loglevel": "warning"
-    },
+    "log": {"loglevel": "warning"},
     "routing": {
         "domainStrategy": "IPIfNonMatch",
         "rules": [
-            {
-                "type": "field",
-                "domain": [
-                    "geosite:category-ads-all"
-                ],
-                "outboundTag": "block"
-            },
-            {
-                "type": "field",
-                "protocol": [
-                    "bittorrent"
-                ],
-                "outboundTag": "block"
-            }
+            {"type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block"},
+            {"type": "field", "protocol": ["bittorrent"], "outboundTag": "block"}
         ]
     },
     "inbounds": [
         {
-            "listen": "0.0.0.0",
-            "port": 443,
-            "protocol": "vless",
-            "tag": "vless-tcp",
-            "settings": {
-                "clients": [
-                    {
-                        "email": "main",
-                        "id": "$uuid",
-                        "flow": "xtls-rprx-vision"
-                    }
-                ],
-                "decryption": "none"
-            },
+            "listen": "0.0.0.0", "port": 443, "protocol": "vless", "tag": "vless-tcp",
+            "settings": {"clients": [{"email": "main", "id": "$uuid", "flow": "xtls-rprx-vision"}], "decryption": "none"},
             "streamSettings": {
-                "network": "tcp",
-                "security": "reality",
+                "network": "tcp", "security": "reality",
                 "realitySettings": {
-                    "show": false,
-                    "dest": "github.com:443",
-                    "xver": 0,
-                    "serverNames": [
-                        "github.com",
-                        "www.github.com"
-                    ],
-                    "privateKey": "$privatkey",
-                    "minClientVer": "",
-                    "maxClientVer": "",
-                    "maxTimeDiff": 0,
-                    "shortIds": [
-                        "$shortsid"
-                    ]
+                    "show": false, "dest": "github.com:443", "xver": 0,
+                    "serverNames": ["github.com", "www.github.com"],
+                    "privateKey": "$privatkey", "shortIds": ["$shortsid"]
                 }
             },
-            "sniffing": {
-                "enabled": true,
-                "destOverride": [
-                    "http",
-                    "tls",
-                    "quic",
-                    "fakedns"
-                ]
-            }
+            "sniffing": {"enabled": true, "destOverride": ["http","tls","quic","fakedns"]}
         },
         {
-            "listen": "0.0.0.0",
-            "port": 8443,
-            "protocol": "vless",
-            "tag": "vless-xhttp",
-            "settings": {
-                "clients": [
-                    {
-                        "email": "main",
-                        "id": "$uuid",
-                        "flow": ""
-                    }
-                ],
-                "decryption": "none"
-            },
+            "listen": "0.0.0.0", "port": 8443, "protocol": "vless", "tag": "vless-xhttp",
+            "settings": {"clients": [{"email": "main", "id": "$uuid", "flow": ""}], "decryption": "none"},
             "streamSettings": {
-                "network": "xhttp",
-                "xhttpSettings": {
-                    "path": "/"
-                },
+                "network": "xhttp", "xhttpSettings": {"path": "/"},
                 "security": "reality",
                 "realitySettings": {
-                    "show": false,
-                    "dest": "github.com:443",
-                    "xver": 0,
-                    "serverNames": [
-                        "github.com",
-                        "www.github.com"
-                    ],
-                    "privateKey": "$privatkey",
-                    "minClientVer": "",
-                    "maxClientVer": "",
-                    "maxTimeDiff": 0,
-                    "shortIds": [
-                        "$shortsid"
-                    ]
+                    "show": false, "dest": "github.com:443", "xver": 0,
+                    "serverNames": ["github.com", "www.github.com"],
+                    "privateKey": "$privatkey", "shortIds": ["$shortsid"]
                 }
             },
-            "sniffing": {
-                "enabled": true,
-                "destOverride": [
-                    "http",
-                    "tls",
-                    "quic",
-                    "fakedns"
-                ]
-            }
+            "sniffing": {"enabled": true, "destOverride": ["http","tls","quic","fakedns"]}
         }
     ],
     "outbounds": [
-        {
-            "protocol": "freedom",
-            "tag": "direct"
-        },
-        {
-            "protocol": "blackhole",
-            "tag": "block"
-        }
+        {"protocol": "freedom", "tag": "direct"},
+        {"protocol": "blackhole", "tag": "block"}
     ],
-    "policy": {
-        "levels": {
-            "0": {
-                "handshake": 3,
-                "connIdle": 180
-            }
-        }
-    }
+    "policy": {"levels": {"0": {"handshake": 3, "connIdle": 180}}}
 }
 EOF
 
-# Создаём файл для хранения маппинга пользователь -> файл подписки
 touch /usr/local/etc/xray/.submap
 
-# ==================== КОМАНДЫ ====================
-
-# editrepo — настройка репозитория и токена
+# === editrepo ===
 cat << 'EOF' > /usr/local/bin/editrepo
 #!/bin/bash
 REPO_FILE="/usr/local/etc/xray/.repo"
@@ -197,8 +99,6 @@ fi
 read -p "GitHub репозиторий (user/repo): " repo
 read -p "GitHub токен: " token
 read -p "URL сайта (например https://mysite.netlify.app): " site_url
-
-# Убираем trailing slash
 site_url="${site_url%/}"
 
 cat > "$REPO_FILE" << CONF
@@ -213,74 +113,14 @@ echo "Настройки сохранены."
 EOF
 chmod +x /usr/local/bin/editrepo
 
-# userlist — список клиентов
-cat << 'EOF' > /usr/local/bin/userlist
-#!/bin/bash
-emails=($(jq -r '.inbounds[0].settings.clients[].email' "/usr/local/etc/xray/config.json"))
-
-if [[ ${#emails[@]} -eq 0 ]]; then
-    echo "Список клиентов пуст"
-    exit 1
-fi
-
-echo "Список клиентов:"
-for i in "${!emails[@]}"; do
-    echo "$((i+1)). ${emails[$i]}"
-done
-EOF
-chmod +x /usr/local/bin/userlist
-
-# mainuser — ссылки основного пользователя (TCP + XHTTP)
-cat << 'EOF' > /usr/local/bin/mainuser
+# === _gen_sub ===
+cat << 'EOF' > /usr/local/bin/_gen_sub
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
 KEYS="/usr/local/etc/xray/.keys"
-
-uuid=$(awk -F': ' '/uuid/ {print $2}' "$KEYS")
-pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
-sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
-ip=$(timeout 3 curl -4 -s icanhazip.com)
-
-INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
-for (( i=0; i<INBOUND_COUNT; i++ )); do
-    network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
-    port=$(jq -r --argjson idx "$i" '.inbounds[$idx].port' "$CONFIG")
-    sni=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.realitySettings.serverNames[0]' "$CONFIG")
-    flow=$(jq -r --argjson idx "$i" '.inbounds[$idx].settings.clients[0].flow // ""' "$CONFIG")
-
-    if [ "$network" = "tcp" ]; then
-        link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$ip"
-        echo ""
-        echo "=== TCP (порт $port) ==="
-    elif [ "$network" = "xhttp" ]; then
-        path=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.xhttpSettings.path' "$CONFIG")
-        link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$ip"
-        echo ""
-        echo "=== XHTTP (порт $port) ==="
-    else
-        continue
-    fi
-
-    echo "$link"
-    echo ""
-    echo "QR-код:"
-    echo "$link" | qrencode -t ansiutf8
-done
-EOF
-chmod +x /usr/local/bin/mainuser
-
-# _gen_sub — внутренняя функция генерации файла подписки для пользователя
-cat << 'GENEOF' > /usr/local/bin/_gen_sub
-#!/bin/bash
-# Использование: _gen_sub <email>
-CONFIG="/usr/local/etc/xray/config.json"
-KEYS="/usr/local/etc/xray/.keys"
-SUBMAP="/usr/local/etc/xray/.submap"
 
 email="$1"
-if [ -z "$email" ]; then
-    exit 1
-fi
+if [ -z "$email" ]; then exit 1; fi
 
 pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
 sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
@@ -295,9 +135,7 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     uuid=$(jq -r --argjson idx "$i" --arg email "$email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .id' "$CONFIG")
     flow=$(jq -r --argjson idx "$i" --arg email "$email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .flow // ""' "$CONFIG")
 
-    if [ -z "$uuid" ]; then
-        continue
-    fi
+    if [ -z "$uuid" ]; then continue; fi
 
     if [ "$network" = "tcp" ]; then
         link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$email"
@@ -315,11 +153,11 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     fi
 done
 
-echo -e "$links" | base64 -w 0
-GENEOF
+echo -e "$links"
+EOF
 chmod +x /usr/local/bin/_gen_sub
 
-# pushsubs — генерация и пуш подписок в GitHub
+# === pushsubs ===
 cat << 'EOF' > /usr/local/bin/pushsubs
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -334,15 +172,51 @@ fi
 source "$REPO_FILE"
 
 if [ -z "$repo" ] || [ -z "$token" ]; then
-    echo "Неполные настройки репозитория. Выполните editrepo."
+    echo "Неполные настройки. Выполните editrepo."
+    exit 1
+fi
+
+emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
+
+if [[ ${#emails[@]} -eq 0 ]]; then
+    echo "Нет клиентов."
+    exit 1
+fi
+
+echo ""
+echo "Список клиентов:"
+for i in "${!emails[@]}"; do
+    echo "$((i+1)). ${emails[$i]}"
+done
+echo "a. Все пользователи"
+echo ""
+read -p "Выберите: " choice
+
+selected_emails=()
+if [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
+    selected_emails=("${emails[@]}")
+elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#emails[@]} )); then
+    selected_emails=("${emails[$((choice - 1))]}")
+else
+    echo "Ошибка: неверный выбор."
+    exit 1
+fi
+
+echo ""
+echo "Режим:"
+echo "1. Перезаписать (только ссылки этого сервера)"
+echo "2. Дописать (добавить ссылки к существующим)"
+echo ""
+read -p "Выберите режим (1/2): " mode
+
+if [ "$mode" != "1" ] && [ "$mode" != "2" ]; then
+    echo "Ошибка: выберите 1 или 2."
     exit 1
 fi
 
 WORK_DIR="/tmp/xray-subs-work"
 rm -rf "$WORK_DIR"
-mkdir -p "$WORK_DIR"
 
-# Клонируем репозиторий
 git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
 if [ $? -ne 0 ]; then
     echo "Ошибка: не удалось клонировать репозиторий."
@@ -353,41 +227,41 @@ fi
 cd "$WORK_DIR"
 git config user.email "xray@server"
 git config user.name "xray"
+cp "$SUBMAP" /usr/local/etc/xray/.submap.old 2>/dev/null
 
-# Удаляем старые файлы подписок (кроме .gitkeep и .git)
-find "$WORK_DIR" -maxdepth 1 -type f ! -name '.gitkeep' -delete
-
-# Генерируем подписки для каждого пользователя
-emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
-
-> "$SUBMAP"
-
-for email in "${emails[@]}"; do
-    # Проверяем есть ли уже маппинг
-    existing_file=$(grep "^${email}=" /usr/local/etc/xray/.submap.old 2>/dev/null | cut -d= -f2)
+for email in "${selected_emails[@]}"; do
+    existing_file=$(grep "^${email}=" "$SUBMAP" 2>/dev/null | cut -d= -f2)
     if [ -n "$existing_file" ]; then
         filename="$existing_file"
     else
         filename="$(openssl rand -hex 10).txt"
+        echo "${email}=${filename}" >> "$SUBMAP"
     fi
 
-    # Генерируем содержимое подписки
-    sub_content=$(/usr/local/bin/_gen_sub "$email")
-    echo "$sub_content" > "${WORK_DIR}/${filename}"
+    new_links=$(/usr/local/bin/_gen_sub "$email")
 
-    echo "${email}=${filename}" >> "$SUBMAP"
+    if [ "$mode" = "2" ] && [ -f "${WORK_DIR}/${filename}" ]; then
+        existing_links=$(base64 -d "${WORK_DIR}/${filename}" 2>/dev/null || echo "")
+        if [ -n "$existing_links" ]; then
+            combined="${existing_links}\n${new_links}"
+        else
+            combined="$new_links"
+        fi
+        echo -e "$combined" | base64 -w 0 > "${WORK_DIR}/${filename}"
+    else
+        echo -e "$new_links" | base64 -w 0 > "${WORK_DIR}/${filename}"
+    fi
 done
 
-# Сохраняем старый маппинг для следующего раза
 cp "$SUBMAP" /usr/local/etc/xray/.submap.old
 
-# Пушим
 git add -A
 git commit -m "update subs" 2>/dev/null
 
 if [ $? -eq 0 ]; then
     git push 2>/dev/null
     if [ $? -eq 0 ]; then
+        echo ""
         echo "Подписки обновлены."
     else
         echo "Ошибка при пуше."
@@ -400,7 +274,7 @@ rm -rf "$WORK_DIR"
 EOF
 chmod +x /usr/local/bin/pushsubs
 
-# sharesubs — показать ссылки на подписки пользователей
+# === sharesubs ===
 cat << 'EOF' > /usr/local/bin/sharesubs
 #!/bin/bash
 REPO_FILE="/usr/local/etc/xray/.repo"
@@ -417,19 +291,47 @@ if [ ! -f "$SUBMAP" ] || [ ! -s "$SUBMAP" ]; then
 fi
 
 source "$REPO_FILE"
+mapfile -t entries < "$SUBMAP"
+
+if [[ ${#entries[@]} -eq 0 ]]; then
+    echo "Нет подписок."
+    exit 1
+fi
 
 echo ""
-echo "Ссылки на подписки:"
+echo "Список клиентов:"
+for i in "${!entries[@]}"; do
+    email=$(echo "${entries[$i]}" | cut -d= -f1)
+    echo "$((i+1)). $email"
+done
+echo "a. Все пользователи"
 echo ""
-while IFS='=' read -r email filename; do
+read -p "Выберите: " choice
+
+echo ""
+if [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
+    for entry in "${entries[@]}"; do
+        email=$(echo "$entry" | cut -d= -f1)
+        filename=$(echo "$entry" | cut -d= -f2)
+        echo "$email:"
+        echo "  ${site_url}/${filename}"
+        echo ""
+    done
+elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#entries[@]} )); then
+    entry="${entries[$((choice - 1))]}"
+    email=$(echo "$entry" | cut -d= -f1)
+    filename=$(echo "$entry" | cut -d= -f2)
     echo "$email:"
     echo "  ${site_url}/${filename}"
     echo ""
-done < "$SUBMAP"
+else
+    echo "Ошибка: неверный выбор."
+    exit 1
+fi
 EOF
 chmod +x /usr/local/bin/sharesubs
 
-# newuser — создание пользователя (без QR и ссылок)
+# === newuser (без QR) ===
 cat << 'EOF' > /usr/local/bin/newuser
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -449,7 +351,6 @@ fi
 
 uuid=$(xray uuid)
 
-# Добавляем во все inbound
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
 for (( i=0; i<INBOUND_COUNT; i++ )); do
     network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
@@ -466,18 +367,17 @@ done
 
 systemctl restart xray
 echo "Пользователь $email создан."
-
-# Автоматически обновляем подписки
-if [ -f /usr/local/etc/xray/.repo ]; then
-    pushsubs
-fi
+echo "Используйте pushsubs для обновления подписок."
 EOF
 chmod +x /usr/local/bin/newuser
 
-# rmuser — удаление пользователя из всех inbound
+# === rmuser ===
 cat << 'EOF' > /usr/local/bin/rmuser
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
+REPO_FILE="/usr/local/etc/xray/.repo"
+SUBMAP="/usr/local/etc/xray/.submap"
+
 emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
 
 if [[ ${#emails[@]} -eq 0 ]]; then
@@ -499,7 +399,6 @@ fi
 
 selected_email="${emails[$((choice - 1))]}"
 
-# Удаляем из всех inbound
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
 for (( i=0; i<INBOUND_COUNT; i++ )); do
     jq --argjson idx "$i" --arg email "$selected_email" \
@@ -507,8 +406,8 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
        "$CONFIG" > tmp && mv tmp "$CONFIG"
 done
 
-# Удаляем маппинг подписки
-SUBMAP="/usr/local/etc/xray/.submap"
+sub_filename=$(grep "^${selected_email}=" "$SUBMAP" 2>/dev/null | cut -d= -f2)
+
 if [ -f "$SUBMAP" ]; then
     sed -i "/^${selected_email}=/d" "$SUBMAP"
     cp "$SUBMAP" /usr/local/etc/xray/.submap.old
@@ -517,75 +416,26 @@ fi
 systemctl restart xray
 echo "Клиент $selected_email удалён."
 
-# Автоматически обновляем подписки
-if [ -f /usr/local/etc/xray/.repo ]; then
-    pushsubs
+if [ -n "$sub_filename" ] && [ -f "$REPO_FILE" ]; then
+    source "$REPO_FILE"
+    WORK_DIR="/tmp/xray-subs-work"
+    rm -rf "$WORK_DIR"
+    git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
+    if [ $? -eq 0 ]; then
+        cd "$WORK_DIR"
+        git config user.email "xray@server"
+        git config user.name "xray"
+        rm -f "${WORK_DIR}/${sub_filename}"
+        git add -A
+        git commit -m "remove $selected_email" 2>/dev/null
+        git push 2>/dev/null && echo "Подписка удалена из репозитория."
+    fi
+    rm -rf "$WORK_DIR"
 fi
 EOF
 chmod +x /usr/local/bin/rmuser
 
-# sharelink — ссылки для выбранного клиента (все inbound)
-cat << 'EOF' > /usr/local/bin/sharelink
-#!/bin/bash
-CONFIG="/usr/local/etc/xray/config.json"
-KEYS="/usr/local/etc/xray/.keys"
-
-emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
-
-if [[ ${#emails[@]} -eq 0 ]]; then
-    echo "Нет клиентов."
-    exit 1
-fi
-
-for i in "${!emails[@]}"; do
-   echo "$((i + 1)). ${emails[$i]}"
-done
-
-read -p "Выберите клиента: " client
-
-if ! [[ "$client" =~ ^[0-9]+$ ]] || (( client < 1 || client > ${#emails[@]} )); then
-    echo "Ошибка: номер должен быть от 1 до ${#emails[@]}"
-    exit 1
-fi
-
-selected_email="${emails[$((client - 1))]}"
-
-pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
-sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
-ip=$(timeout 3 curl -4 -s icanhazip.com)
-
-INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
-for (( i=0; i<INBOUND_COUNT; i++ )); do
-    network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
-    port=$(jq -r --argjson idx "$i" '.inbounds[$idx].port' "$CONFIG")
-    sni=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.realitySettings.serverNames[0]' "$CONFIG")
-    uuid=$(jq -r --argjson idx "$i" --arg email "$selected_email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .id' "$CONFIG")
-    flow=$(jq -r --argjson idx "$i" --arg email "$selected_email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .flow // ""' "$CONFIG")
-
-    if [ -z "$uuid" ]; then continue; fi
-
-    if [ "$network" = "tcp" ]; then
-        link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$selected_email"
-        echo ""
-        echo "=== TCP (порт $port) ==="
-    elif [ "$network" = "xhttp" ]; then
-        path=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.xhttpSettings.path' "$CONFIG")
-        link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$selected_email"
-        echo ""
-        echo "=== XHTTP (порт $port) ==="
-    else
-        continue
-    fi
-
-    echo "$link"
-    echo ""
-    echo "QR-код:"
-    echo "$link" | qrencode -t ansiutf8
-done
-EOF
-chmod +x /usr/local/bin/sharelink
-
-# exportusers — экспорт пользователей и ключей
+# === exportusers ===
 cat << 'EOF' > /usr/local/bin/exportusers
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -604,18 +454,13 @@ tar -czf "$ARCHIVE" -C "$EXPORT_DIR" .
 rm -rf "$EXPORT_DIR"
 
 echo ""
-echo "Экспорт завершён!"
-echo "Файл: $ARCHIVE"
-echo ""
-echo "Скопируйте архив на новый сервер:"
+echo "Экспорт завершён! Файл: $ARCHIVE"
 echo "  scp $ARCHIVE root@NEW_SERVER_IP:~/"
-echo ""
-echo "На новом сервере выполните:"
 echo "  importusers ~/$(basename $ARCHIVE)"
 EOF
 chmod +x /usr/local/bin/exportusers
 
-# importusers — импорт пользователей и ключей
+# === importusers ===
 cat << 'EOF' > /usr/local/bin/importusers
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -631,18 +476,13 @@ if [[ ! -f "$1" ]]; then
     exit 1
 fi
 
-if [[ ! -f "$CONFIG" ]]; then
-    echo "Ошибка: конфиг Xray не найден."
-    exit 1
-fi
-
 IMPORT_DIR="/tmp/xray-import"
 rm -rf "$IMPORT_DIR"
 mkdir -p "$IMPORT_DIR"
 tar -xzf "$1" -C "$IMPORT_DIR"
 
 if [[ ! -f "$IMPORT_DIR/clients.json" || ! -f "$IMPORT_DIR/.keys" ]]; then
-    echo "Ошибка: архив повреждён или неверный формат"
+    echo "Ошибка: архив повреждён"
     rm -rf "$IMPORT_DIR"
     exit 1
 fi
@@ -650,7 +490,6 @@ fi
 CLIENT_COUNT=$(jq 'length' "$IMPORT_DIR/clients.json")
 echo "Найдено клиентов: $CLIENT_COUNT"
 
-# Клиенты для каждого inbound
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
 for (( i=0; i<INBOUND_COUNT; i++ )); do
     network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
@@ -664,19 +503,12 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
        "$CONFIG" > "${CONFIG}.tmp" && mv "${CONFIG}.tmp" "$CONFIG"
 done
 
-# Восстанавливаем ключи
 cp "$IMPORT_DIR/.keys" "$KEYS"
-
-# Восстанавливаем маппинг подписок
-if [ -f "$IMPORT_DIR/.submap" ]; then
-    cp "$IMPORT_DIR/.submap" /usr/local/etc/xray/.submap
-    cp "$IMPORT_DIR/.submap" /usr/local/etc/xray/.submap.old
-fi
+[ -f "$IMPORT_DIR/.submap" ] && cp "$IMPORT_DIR/.submap" /usr/local/etc/xray/.submap && cp "$IMPORT_DIR/.submap" /usr/local/etc/xray/.submap.old
 
 PRIVKEY=$(awk -F': ' '/PrivateKey/ {print $2}' "$KEYS")
 SHORTSID=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
 
-# Обновляем ключи во всех inbound
 for (( i=0; i<INBOUND_COUNT; i++ )); do
     jq --argjson idx "$i" --arg pk "$PRIVKEY" --arg sid "$SHORTSID" \
        '.inbounds[$idx].streamSettings.realitySettings.privateKey = $pk |
@@ -686,14 +518,22 @@ done
 
 rm -rf "$IMPORT_DIR"
 systemctl restart xray
-
-echo ""
-echo "Импорт завершён! Xray перезапущен."
-echo "Импортировано клиентов: $CLIENT_COUNT"
-echo ""
-echo "Используйте pushsubs для обновления подписок."
+echo "Импорт завершён! Используйте pushsubs для обновления подписок."
 EOF
 chmod +x /usr/local/bin/importusers
+
+echo ""
+echo "=============================="
+echo "Установлены команды:"
+echo "  editrepo  — настройка репозитория и токена"
+echo "  pushsubs  — обновить подписки (выбор пользователей + режим)"
+echo "  sharesubs — показать ссылки на подписки"
+echo "  exportusers / importusers"
+echo ""
+echo "Обновлены: newuser (без QR), rmuser (с удалением подписки)"
+echo ""
+echo "Выполните editrepo для начала работы."
+echo "=============================="
 
 systemctl restart xray
 
@@ -704,11 +544,10 @@ echo "TCP+Vision на порту 443"
 echo "XHTTP на порту 8443"
 echo "=============================="
 echo ""
-echo "Выполните editrepo для настройки репозитория подписок."
+echo "Выполните editrepo для настройки подписок."
 echo ""
 mainuser
 
-# Файл с подсказками
 cat << 'EOF' > $HOME/help
 
 Команды для управления Xray:
@@ -720,7 +559,7 @@ cat << 'EOF' > $HOME/help
     userlist      — список клиентов
 
     editrepo      — настройка репозитория и токена
-    pushsubs      — обновить подписки в репозитории
+    pushsubs      — обновить подписки (выбор пользователей + режим)
     sharesubs     — показать ссылки на подписки
 
     exportusers   — экспорт пользователей в архив
