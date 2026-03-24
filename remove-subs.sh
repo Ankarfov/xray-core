@@ -11,11 +11,9 @@ rm -f /usr/local/bin/editrepo
 rm -f /usr/local/bin/pushsubs
 rm -f /usr/local/bin/sharesubs
 rm -f /usr/local/bin/_gen_sub
-rm -f /usr/local/bin/exportusers
 rm -f /usr/local/bin/importusers
 rm -f /usr/local/etc/xray/.repo
 rm -f /usr/local/etc/xray/.submap
-rm -f /usr/local/etc/xray/.submap.old
 
 # === newuser с QR ===
 cat << 'EOF' > /usr/local/bin/newuser
@@ -128,5 +126,5 @@ chmod +x /usr/local/bin/rmuser
 
 echo ""
 echo "Откат завершён."
-echo "Удалены: editrepo, pushsubs, sharesubs, exportusers, importusers"
+echo "Удалены: editrepo, pushsubs, sharesubs, importusers"
 echo "Восстановлены: newuser (с QR), rmuser (без автопуша)"
