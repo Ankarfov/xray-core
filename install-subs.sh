@@ -63,11 +63,15 @@ CONFIG="/usr/local/etc/xray/config.json"
 KEYS="/usr/local/etc/xray/.keys"
 
 email="$1"
+ip="$2"
 if [ -z "$email" ]; then exit 1; fi
+
+if [ -z "$ip" ]; then
+    ip=$(timeout 3 curl -4 -s icanhazip.com)
+fi
 
 pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
 sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
-ip=$(timeout 3 curl -4 -s icanhazip.com)
 
 links=""
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
@@ -129,6 +133,7 @@ fi
 WORK_DIR="/tmp/xray-subs-work"
 rm -rf "$WORK_DIR"
 
+echo "Загружаю репозиторий..."
 git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
 if [ $? -ne 0 ]; then
     echo "Ошибка: не удалось клонировать репозиторий."
@@ -187,6 +192,8 @@ fi
 
 existing_files=$(ls "$WORK_DIR"/*.txt 2>/dev/null | xargs -I{} basename {} | sort)
 
+SERVER_IP=$(timeout 3 curl -4 -s icanhazip.com)
+
 for email in "${selected_emails[@]}"; do
     existing_file=$(grep "^${email}=" "$SUBMAP" 2>/dev/null | cut -d= -f2)
     if [ -n "$existing_file" ]; then
@@ -202,7 +209,7 @@ for email in "${selected_emails[@]}"; do
         existing_files="${existing_files}\n${filename}"
     fi
 
-    new_links=$(/usr/local/bin/_gen_sub "$email")
+    new_links=$(/usr/local/bin/_gen_sub "$email" "$SERVER_IP")
 
     if [ "$mode" = "2" ] && [ -f "${WORK_DIR}/${filename}" ]; then
         existing_links=$(base64 -d "${WORK_DIR}/${filename}" 2>/dev/null || echo "")
@@ -310,6 +317,7 @@ source "$REPO_FILE"
 WORK_DIR="/tmp/xray-import-work"
 rm -rf "$WORK_DIR"
 
+echo "Загружаю репозиторий..."
 git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
 if [ $? -ne 0 ]; then
     echo "Ошибка: не удалось клонировать репозиторий."
@@ -503,6 +511,7 @@ if [ -n "$sub_filename" ] && [ -f "$REPO_FILE" ]; then
     source "$REPO_FILE"
     WORK_DIR="/tmp/xray-subs-work"
     rm -rf "$WORK_DIR"
+    echo "Удаляю подписку из репозитория..."
     git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
     if [ $? -eq 0 ]; then
         cd "$WORK_DIR"
