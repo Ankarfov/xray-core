@@ -82,6 +82,12 @@ fi
 if ! systemctl is-active --quiet xray; then
   systemctl restart xray
 fi
+
+# --- Проверяем количество соединений ---
+CONNS=$(ss -tnp | grep xray | wc -l)
+if [ "$CONNS" -gt 3000 ]; then
+    systemctl restart xray
+fi
 EOF
 
 chmod +x /usr/local/bin/check_warp.sh
