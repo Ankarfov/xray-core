@@ -71,7 +71,7 @@ cat << EOF > /usr/local/etc/xray/config.json
         {"protocol": "freedom", "tag": "direct"},
         {"protocol": "blackhole", "tag": "block"}
     ],
-    "policy": {"levels": {"0": {"handshake": 3, "connIdle": 180}}}
+    "policy": {"levels": {"0": {"handshake": 3, "connIdle": 60}}}
 }
 EOF
 
