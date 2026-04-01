@@ -1,4 +1,6 @@
 #!/bin/bash
+export NEEDRESTART_MODE=a
+export DEBIAN_FRONTEND=noninteractive
 echo "=============================="
 echo "Установка Vless: TCP+Vision (443) + XHTTP (8443)"
 echo "=============================="
@@ -23,6 +25,7 @@ touch /usr/local/etc/xray/.keys
 echo "shortsid: $(openssl rand -hex 8)" >> /usr/local/etc/xray/.keys
 echo "uuid: $(xray uuid)" >> /usr/local/etc/xray/.keys
 xray x25519 >> /usr/local/etc/xray/.keys
+chmod 600 /usr/local/etc/xray/.keys
 
 export uuid=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/uuid/ {print $2}')
 export privatkey=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/PrivateKey/ {print $2}')
@@ -71,7 +74,7 @@ cat << EOF > /usr/local/etc/xray/config.json
         {"protocol": "freedom", "tag": "direct"},
         {"protocol": "blackhole", "tag": "block"}
     ],
-    "policy": {"levels": {"0": {"handshake": 3, "connIdle": 60}}}
+    "policy": {"levels": {"0": {"handshake": 3, "connIdle": 180}}}
 }
 EOF
 
@@ -142,10 +145,12 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     if [ -z "$uuid" ]; then continue; fi
 
     if [ "$network" = "tcp" ]; then
-        link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$email"
+        label="${email}|TCP"
+        link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$label"
     elif [ "$network" = "xhttp" ]; then
         path=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.xhttpSettings.path' "$CONFIG")
-        link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$email"
+        label="${email}|XHTTP"
+        link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$label"
     else
         continue
     fi
@@ -188,6 +193,7 @@ if [[ ${#emails[@]} -eq 0 ]]; then
 fi
 
 WORK_DIR="/tmp/xray-subs-work"
+trap "rm -rf $WORK_DIR" EXIT
 rm -rf "$WORK_DIR"
 
 echo "Загружаю репозиторий..."
@@ -209,7 +215,7 @@ for f in "$WORK_DIR"/*.txt; do
     filename=$(basename "$f")
     first_link=$(base64 -d "$f" 2>/dev/null | head -1)
     if [ -z "$first_link" ]; then continue; fi
-    email=$(echo "$first_link" | grep -oP '(?<=#)[^#]+$')
+    email=$(echo "$first_link" | grep -oP '(?<=#)[^|#]+')
     if [ -z "$email" ]; then continue; fi
     echo "${email}=${filename}" >> "$SUBMAP"
 done
@@ -372,6 +378,7 @@ fi
 source "$REPO_FILE"
 
 WORK_DIR="/tmp/xray-import-work"
+trap "rm -rf $WORK_DIR" EXIT
 rm -rf "$WORK_DIR"
 
 echo "Загружаю репозиторий..."
@@ -391,9 +398,13 @@ for f in "$WORK_DIR"/*.txt; do
     filename=$(basename "$f")
     first_link=$(base64 -d "$f" 2>/dev/null | head -1)
     if [ -z "$first_link" ]; then continue; fi
-    email=$(echo "$first_link" | grep -oP '(?<=#)[^#]+$')
+    email=$(echo "$first_link" | grep -oP '(?<=#)[^|#]+')
     uuid=$(echo "$first_link" | grep -oP '(?<=://)[^@]+')
     if [ -z "$email" ] || [ -z "$uuid" ]; then continue; fi
+
+    # Не дублируем
+    if [ -n "${user_uuid[$email]+x}" ]; then continue; fi
+
     user_uuid["$email"]="$uuid"
     user_file["$email"]="$filename"
     user_emails+=("$email")
@@ -681,12 +692,12 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     if [ -z "$uuid" ]; then continue; fi
 
     if [ "$network" = "tcp" ]; then
-        link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$selected_email"
+        link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#${selected_email}|TCP"
         echo ""
         echo "=== TCP (порт $port) ==="
     elif [ "$network" = "xhttp" ]; then
         path=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.xhttpSettings.path' "$CONFIG")
-        link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$selected_email"
+        link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#${selected_email}|XHTTP"
         echo ""
         echo "=== XHTTP (порт $port) ==="
     else
