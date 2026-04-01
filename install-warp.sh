@@ -121,6 +121,39 @@ EOF
 systemctl daemon-reload
 systemctl enable --now warp-monitor.timer
 
+# --- Очистка диска раз в 7 дней ---
+cat >/usr/local/bin/cleanup_disk.sh <<'EOF'
+#!/bin/bash
+apt clean
+journalctl --vacuum-size=100M
+EOF
+
+chmod +x /usr/local/bin/cleanup_disk.sh
+
+cat >/etc/systemd/system/cleanup-disk.service <<'EOF'
+[Unit]
+Description=Очистка apt-кэша и журналов
+
+[Service]
+ExecStart=/usr/local/bin/cleanup_disk.sh
+Type=oneshot
+EOF
+
+cat >/etc/systemd/system/cleanup-disk.timer <<'EOF'
+[Unit]
+Description=Очистка диска раз в 7 дней
+
+[Timer]
+OnBootSec=1h
+OnUnitActiveSec=7d
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now cleanup-disk.timer
+
 # --- Настройка XRAY ---
 XRAY_SERVICE="/etc/systemd/system/xray.service"
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
