@@ -1,4 +1,6 @@
 #!/bin/bash
+export NEEDRESTART_MODE=a
+export DEBIAN_FRONTEND=noninteractive
 echo "=============================="
 echo "Установка RU-сервера (балансировщик + RU-прокси)"
 echo "=============================="
@@ -23,6 +25,7 @@ touch /usr/local/etc/xray/.keys
 echo "shortsid: $(openssl rand -hex 8)" >> /usr/local/etc/xray/.keys
 echo "uuid: $(xray uuid)" >> /usr/local/etc/xray/.keys
 xray x25519 >> /usr/local/etc/xray/.keys
+chmod 600 /usr/local/etc/xray/.keys
 
 export uuid=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/uuid/ {print $2}')
 export privatkey=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/PrivateKey/ {print $2}')
@@ -163,14 +166,14 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
 
     if [ "$network" = "tcp" ]; then
         if [ "$tag" = "vless-ru" ]; then
-            label="${email}-RU"
+            label="${email}|RU"
         else
-            label="${email}-VPN"
+            label="${email}|VPN|TCP"
         fi
         link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$label"
     elif [ "$network" = "xhttp" ]; then
         path=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.xhttpSettings.path' "$CONFIG")
-        label="${email}-VPN"
+        label="${email}|VPN|XHTTP"
         link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$label"
     else
         continue
@@ -204,6 +207,7 @@ fi
 source "$REPO_FILE"
 
 WORK_DIR="/tmp/xray-pullconfig-work"
+trap "rm -rf $WORK_DIR" EXIT
 rm -rf "$WORK_DIR"
 
 echo "Загружаю репозиторий..."
@@ -228,7 +232,7 @@ for f in "$WORK_DIR"/*.txt; do
     if [ -z "$decoded" ]; then continue; fi
 
     first_link=$(echo "$decoded" | head -1)
-    email=$(echo "$first_link" | grep -oP '(?<=#)[^#]+$')
+    email=$(echo "$first_link" | grep -oP '(?<=#)[^|#]+')
 
     if [ "$email" = "$SERVER_EMAIL" ]; then
         server_filename="$filename"
@@ -345,9 +349,7 @@ for f in "$WORK_DIR"/*.txt; do
 
     first_link=$(base64 -d "$f" 2>/dev/null | head -1)
     if [ -z "$first_link" ]; then continue; fi
-    email=$(echo "$first_link" | grep -oP '(?<=#)[^#]+$')
-    # Убираем суффиксы -VPN, -RU из email
-    email=$(echo "$email" | sed 's/-VPN$//' | sed 's/-RU$//')
+    email=$(echo "$first_link" | grep -oP '(?<=#)[^|#]+')
     uuid=$(echo "$first_link" | grep -oP '(?<=://)[^@]+')
     if [ -z "$email" ] || [ -z "$uuid" ]; then continue; fi
 
@@ -468,6 +470,7 @@ if [ -f "$SERVERLINK" ]; then
 fi
 
 WORK_DIR="/tmp/xray-subs-work"
+trap "rm -rf $WORK_DIR" EXIT
 rm -rf "$WORK_DIR"
 
 echo "Загружаю репозиторий..."
@@ -493,9 +496,7 @@ for f in "$WORK_DIR"/*.txt; do
 
     first_link=$(base64 -d "$f" 2>/dev/null | head -1)
     if [ -z "$first_link" ]; then continue; fi
-    email=$(echo "$first_link" | grep -oP '(?<=#)[^#]+$')
-    # Убираем суффиксы -VPN, -RU из email
-    email=$(echo "$email" | sed 's/-VPN$//' | sed 's/-RU$//')
+    email=$(echo "$first_link" | grep -oP '(?<=#)[^|#]+')
     if [ -z "$email" ]; then continue; fi
     echo "${email}=${filename}" >> "$SUBMAP"
 done
@@ -854,9 +855,11 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     if [ -z "$uuid" ]; then continue; fi
 
     if [ "$tag" = "vless-ru" ]; then
-        label="${selected_email}-RU"
+        label="${selected_email}|RU"
+    elif [ "$network" = "xhttp" ]; then
+        label="${selected_email}|VPN|XHTTP"
     else
-        label="${selected_email}-VPN"
+        label="${selected_email}|VPN|TCP"
     fi
 
     if [ "$network" = "tcp" ]; then
