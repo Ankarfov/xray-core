@@ -31,8 +31,6 @@ export uuid=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/uuid/ {print $2}')
 export privatkey=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/PrivateKey/ {print $2}')
 export shortsid=$(cat /usr/local/etc/xray/.keys | awk -F': ' '/shortsid/ {print $2}')
 
-# Начальный конфиг — только inbound'ы и direct/block
-# outbound'ы с серверами добавит pullconfig
 cat << EOF > /usr/local/etc/xray/config.json
 {
     "log": {"loglevel": "warning"},
@@ -103,32 +101,24 @@ touch /usr/local/etc/xray/.serverlink
 cat << 'EOF' > /usr/local/bin/editrepo
 #!/bin/bash
 REPO_FILE="/usr/local/etc/xray/.repo"
-
 echo "Настройка репозитория для подписок"
 echo ""
-
 if [ -f "$REPO_FILE" ]; then
     echo "Текущие настройки:"
     cat "$REPO_FILE"
     echo ""
     read -p "Перезаписать? (y/n): " confirm
-    if [ "$confirm" != "y" ]; then
-        echo "Отменено."
-        exit 0
-    fi
+    if [ "$confirm" != "y" ]; then echo "Отменено."; exit 0; fi
 fi
-
 read -p "GitHub репозиторий (user/repo): " repo
 read -p "GitHub токен: " token
 read -p "URL сайта (например https://mysite.netlify.app): " site_url
 site_url="${site_url%/}"
-
 cat > "$REPO_FILE" << CONF
 repo=$repo
 token=$token
 site_url=$site_url
 CONF
-
 chmod 600 "$REPO_FILE"
 echo ""
 echo "Настройки сохранены."
@@ -140,18 +130,12 @@ cat << 'EOF' > /usr/local/bin/_gen_sub
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
 KEYS="/usr/local/etc/xray/.keys"
-
 email="$1"
 ip="$2"
 if [ -z "$email" ]; then exit 1; fi
-
-if [ -z "$ip" ]; then
-    ip=$(timeout 3 curl -4 -s icanhazip.com)
-fi
-
+if [ -z "$ip" ]; then ip=$(timeout 3 curl -4 -s icanhazip.com); fi
 pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
 sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
-
 links=""
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
 for (( i=0; i<INBOUND_COUNT; i++ )); do
@@ -161,36 +145,22 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     uuid=$(jq -r --argjson idx "$i" --arg email "$email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .id' "$CONFIG")
     flow=$(jq -r --argjson idx "$i" --arg email "$email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .flow // ""' "$CONFIG")
     tag=$(jq -r --argjson idx "$i" '.inbounds[$idx].tag' "$CONFIG")
-
     if [ -z "$uuid" ]; then continue; fi
-
     if [ "$network" = "tcp" ]; then
-        if [ "$tag" = "vless-ru" ]; then
-            label="${email}|RU"
-        else
-            label="${email}|VPN|TCP"
-        fi
+        if [ "$tag" = "vless-ru" ]; then label="${email}|RU"; else label="${email}|VPN|TCP"; fi
         link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$label"
     elif [ "$network" = "xhttp" ]; then
         path=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.xhttpSettings.path' "$CONFIG")
         label="${email}|VPN|XHTTP"
         link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$label"
-    else
-        continue
-    fi
-
-    if [ -n "$links" ]; then
-        links="$links\n$link"
-    else
-        links="$link"
-    fi
+    else continue; fi
+    if [ -n "$links" ]; then links="$links\n$link"; else links="$link"; fi
 done
-
 echo -e "$links"
 EOF
 chmod +x /usr/local/bin/_gen_sub
 
-# === pullconfig (серверы + пользователи) ===
+# === pullconfig (два балансировщика: TCP и XHTTP) ===
 cat << 'EOF' > /usr/local/bin/pullconfig
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
@@ -199,11 +169,7 @@ SUBMAP="/usr/local/etc/xray/.submap"
 SERVERLINK="/usr/local/etc/xray/.serverlink"
 SERVER_EMAIL="ru-server"
 
-if [ ! -f "$REPO_FILE" ]; then
-    echo "Репозиторий не настроен. Выполните editrepo."
-    exit 1
-fi
-
+if [ ! -f "$REPO_FILE" ]; then echo "Репозиторий не настроен. Выполните editrepo."; exit 1; fi
 source "$REPO_FILE"
 
 WORK_DIR="/tmp/xray-pullconfig-work"
@@ -212,13 +178,8 @@ rm -rf "$WORK_DIR"
 
 echo "Загружаю репозиторий..."
 git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
-if [ $? -ne 0 ]; then
-    echo "Ошибка: не удалось клонировать репозиторий."
-    rm -rf "$WORK_DIR"
-    exit 1
-fi
+if [ $? -ne 0 ]; then echo "Ошибка: не удалось клонировать репозиторий."; exit 1; fi
 
-# --- Фаза 1: поиск серверной подписки и построение outbound'ов ---
 echo ""
 echo "=== Поиск серверов ==="
 
@@ -230,10 +191,8 @@ for f in "$WORK_DIR"/*.txt; do
     filename=$(basename "$f")
     decoded=$(base64 -d "$f" 2>/dev/null)
     if [ -z "$decoded" ]; then continue; fi
-
     first_link=$(echo "$decoded" | head -1)
     email=$(echo "$first_link" | grep -oP '(?<=#)[^|#]+')
-
     if [ "$email" = "$SERVER_EMAIL" ]; then
         server_filename="$filename"
         while IFS= read -r line; do
@@ -251,18 +210,16 @@ else
     echo "$server_filename" > "$SERVERLINK"
     echo "Найдено ссылок: ${#server_links[@]}"
 
-    # Строим outbound'ы из VLESS-ссылок
     outbounds='[{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"}'
-    balancer_tags=()
+    tcp_tags=()
+    xhttp_tags=()
     idx=0
 
     for link in "${server_links[@]}"; do
         idx=$((idx + 1))
-
         uuid=$(echo "$link" | grep -oP '(?<=://)[^@]+')
         address=$(echo "$link" | grep -oP '(?<=@)[^:]+')
         port=$(echo "$link" | grep -oP '(?<=:)[0-9]+(?=\?)')
-        security=$(echo "$link" | grep -oP '(?<=security=)[^&]+')
         sni=$(echo "$link" | grep -oP '(?<=sni=)[^&]+')
         fp=$(echo "$link" | grep -oP '(?<=fp=)[^&]+')
         pbk=$(echo "$link" | grep -oP '(?<=pbk=)[^&]+')
@@ -272,9 +229,9 @@ else
         path=$(echo "$link" | grep -oP '(?<=path=)[^&]+' | sed 's|%2F|/|g')
 
         tag="proxy-${idx}"
-        balancer_tags+=("\"$tag\"")
 
         if [ "$type" = "tcp" ]; then
+            tcp_tags+=("\"$tag\"")
             outbound=$(cat << OUTBOUND
 ,{
     "protocol": "vless", "tag": "$tag",
@@ -287,6 +244,7 @@ else
 OUTBOUND
 )
         elif [ "$type" = "xhttp" ]; then
+            xhttp_tags+=("\"$tag\"")
             outbound=$(cat << OUTBOUND
 ,{
     "protocol": "vless", "tag": "$tag",
@@ -300,8 +258,7 @@ OUTBOUND
 OUTBOUND
 )
         else
-            echo "  Неизвестный тип: $type, пропуск"
-            continue
+            echo "  Неизвестный тип: $type, пропуск"; continue
         fi
 
         outbounds="${outbounds}${outbound}"
@@ -310,29 +267,37 @@ OUTBOUND
 
     outbounds="${outbounds}]"
 
-    # Обновляем outbound'ы
     echo "$outbounds" | jq '.' > /tmp/xray_outbounds.json
     jq --slurpfile ob /tmp/xray_outbounds.json '.outbounds = $ob[0]' "$CONFIG" > /tmp/xray_new.json && mv /tmp/xray_new.json "$CONFIG"
     rm -f /tmp/xray_outbounds.json
 
-    # Строим балансировщик
-    selector=$(IFS=,; echo "${balancer_tags[*]}")
-    jq --argjson sel "[$selector]" '
-        .routing.balancers = [{"tag": "balancer", "selector": $sel, "strategy": {"type": "leastPing"}}] |
-        .observatory = {"subjectSelector": $sel, "probeURL": "https://www.google.com/generate_204", "probeInterval": "1m"}
+    all_tags=("${tcp_tags[@]}" "${xhttp_tags[@]}")
+    all_selector=$(IFS=,; echo "${all_tags[*]}")
+    tcp_selector=$(IFS=,; echo "${tcp_tags[*]}")
+    xhttp_selector=$(IFS=,; echo "${xhttp_tags[*]}")
+
+    jq --argjson tcp_sel "[${tcp_selector}]" \
+       --argjson xhttp_sel "[${xhttp_selector}]" \
+       --argjson all_sel "[${all_selector}]" '
+        .routing.balancers = [
+            {"tag": "balancer-tcp", "selector": $tcp_sel, "strategy": {"type": "leastPing"}},
+            {"tag": "balancer-xhttp", "selector": $xhttp_sel, "strategy": {"type": "leastPing"}}
+        ] |
+        .observatory = {"subjectSelector": $all_sel, "probeURL": "https://www.google.com/generate_204", "probeInterval": "1m"}
     ' "$CONFIG" > /tmp/xray_new.json && mv /tmp/xray_new.json "$CONFIG"
 
-    # Добавляем правило балансировки (если ещё нет)
-    has_balancer=$(jq '.routing.rules[] | select(.balancerTag == "balancer")' "$CONFIG")
-    if [ -z "$has_balancer" ]; then
-        jq '.routing.rules += [{"type": "field", "inboundTag": ["vless-vpn-tcp", "vless-vpn-xhttp"], "balancerTag": "balancer"}]' \
-           "$CONFIG" > /tmp/xray_new.json && mv /tmp/xray_new.json "$CONFIG"
-    fi
+    # Удаляем старые правила балансировки и добавляем два новых
+    jq '(.routing.rules) |= map(select(.balancerTag == null))' "$CONFIG" > /tmp/xray_new.json && mv /tmp/xray_new.json "$CONFIG"
+    jq '.routing.rules += [
+        {"type": "field", "inboundTag": ["vless-vpn-tcp"], "balancerTag": "balancer-tcp"},
+        {"type": "field", "inboundTag": ["vless-vpn-xhttp"], "balancerTag": "balancer-xhttp"}
+    ]' "$CONFIG" > /tmp/xray_new.json && mv /tmp/xray_new.json "$CONFIG"
 
     echo "Outbound'ы обновлены."
+    echo "  TCP балансировщик: ${#tcp_tags[@]} серверов"
+    echo "  XHTTP балансировщик: ${#xhttp_tags[@]} серверов"
 fi
 
-# --- Фаза 2: импорт пользователей ---
 echo ""
 echo "=== Импорт пользователей ==="
 
@@ -343,19 +308,13 @@ user_emails=()
 for f in "$WORK_DIR"/*.txt; do
     [ -f "$f" ] || continue
     filename=$(basename "$f")
-
-    # Пропускаем серверную подписку
     if [ "$filename" = "$server_filename" ]; then continue; fi
-
     first_link=$(base64 -d "$f" 2>/dev/null | head -1)
     if [ -z "$first_link" ]; then continue; fi
     email=$(echo "$first_link" | grep -oP '(?<=#)[^|#]+')
     uuid=$(echo "$first_link" | grep -oP '(?<=://)[^@]+')
     if [ -z "$email" ] || [ -z "$uuid" ]; then continue; fi
-
-    # Не дублируем
     if [ -n "${user_uuid[$email]+x}" ]; then continue; fi
-
     user_uuid["$email"]="$uuid"
     user_file["$email"]="$filename"
     user_emails+=("$email")
@@ -365,15 +324,10 @@ if [[ ${#user_emails[@]} -eq 0 ]]; then
     echo "Нет пользователей для импорта."
 else
     echo "Найденные пользователи:"
-    new_count=0
     for i in "${!user_emails[@]}"; do
         email="${user_emails[$i]}"
         exists=$(jq --arg email "$email" '.inbounds[0].settings.clients[] | select(.email == $email)' "$CONFIG")
-        if [ -n "$exists" ]; then
-            echo "  $email (уже существует)"
-        else
-            echo "  $email"
-        fi
+        if [ -n "$exists" ]; then echo "  $email (уже существует)"; else echo "  $email"; fi
     done
     echo ""
     echo "a. Все новые пользователи"
@@ -383,27 +337,19 @@ else
     if [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
         for email in "${user_emails[@]}"; do
             exists=$(jq --arg email "$email" '.inbounds[0].settings.clients[] | select(.email == $email)' "$CONFIG")
-            if [ -z "$exists" ]; then
-                selected_emails+=("$email")
-            fi
+            if [ -z "$exists" ]; then selected_emails+=("$email"); fi
         done
     elif [ "$choice" = "n" ] || [ "$choice" = "N" ]; then
         echo "Импорт пользователей пропущен."
-        selected_emails=()
     elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#user_emails[@]} )); then
         selected_email="${user_emails[$((choice - 1))]}"
         exists=$(jq --arg email "$selected_email" '.inbounds[0].settings.clients[] | select(.email == $email)' "$CONFIG")
-        if [ -n "$exists" ]; then
-            echo "Пользователь $selected_email уже существует."
-        else
-            selected_emails+=("$selected_email")
-        fi
+        if [ -n "$exists" ]; then echo "Пользователь $selected_email уже существует."; else selected_emails+=("$selected_email"); fi
     fi
 
     for email in "${selected_emails[@]}"; do
         uuid="${user_uuid[$email]}"
         filename="${user_file[$email]}"
-
         INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
         for (( i=0; i<INBOUND_COUNT; i++ )); do
             network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
@@ -417,19 +363,14 @@ else
                    "$CONFIG" > tmp.json && mv tmp.json "$CONFIG"
             fi
         done
-
         echo "${email}=${filename}" >> "$SUBMAP"
         echo "  Импортирован: $email"
     done
-
-    if [[ ${#selected_emails[@]} -gt 0 ]]; then
-        echo "Импортировано: ${#selected_emails[@]}"
-    fi
+    if [[ ${#selected_emails[@]} -gt 0 ]]; then echo "Импортировано: ${#selected_emails[@]}"; fi
 fi
 
 rm -rf "$WORK_DIR"
 systemctl restart xray
-
 echo ""
 echo "pullconfig завершён."
 echo "Используйте pushsubs для обновления подписок пользователей."
@@ -443,101 +384,54 @@ CONFIG="/usr/local/etc/xray/config.json"
 REPO_FILE="/usr/local/etc/xray/.repo"
 SUBMAP="/usr/local/etc/xray/.submap"
 SERVERLINK="/usr/local/etc/xray/.serverlink"
-
-if [ ! -f "$REPO_FILE" ]; then
-    echo "Репозиторий не настроен. Выполните editrepo."
-    exit 1
-fi
-
+if [ ! -f "$REPO_FILE" ]; then echo "Репозиторий не настроен. Выполните editrepo."; exit 1; fi
 source "$REPO_FILE"
-
-if [ -z "$repo" ] || [ -z "$token" ]; then
-    echo "Неполные настройки. Выполните editrepo."
-    exit 1
-fi
-
+if [ -z "$repo" ] || [ -z "$token" ]; then echo "Неполные настройки. Выполните editrepo."; exit 1; fi
 emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
-
-if [[ ${#emails[@]} -eq 0 ]]; then
-    echo "Нет клиентов."
-    exit 1
-fi
-
-# Читаем защищённый файл серверной подписки
+if [[ ${#emails[@]} -eq 0 ]]; then echo "Нет клиентов."; exit 1; fi
 protected_file=""
-if [ -f "$SERVERLINK" ]; then
-    protected_file=$(cat "$SERVERLINK" | tr -d '[:space:]')
-fi
-
+if [ -f "$SERVERLINK" ]; then protected_file=$(cat "$SERVERLINK" | tr -d '[:space:]'); fi
 WORK_DIR="/tmp/xray-subs-work"
 trap "rm -rf $WORK_DIR" EXIT
 rm -rf "$WORK_DIR"
-
 echo "Загружаю репозиторий..."
 git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
-if [ $? -ne 0 ]; then
-    echo "Ошибка: не удалось клонировать репозиторий."
-    rm -rf "$WORK_DIR"
-    exit 1
-fi
-
+if [ $? -ne 0 ]; then echo "Ошибка: не удалось клонировать репозиторий."; exit 1; fi
 cd "$WORK_DIR"
 git config user.email "xray@server"
 git config user.name "xray"
-
-# Сканируем репозиторий — строим submap (пропуская серверную подписку)
 > "$SUBMAP"
 for f in "$WORK_DIR"/*.txt; do
     [ -f "$f" ] || continue
     filename=$(basename "$f")
-
-    # Пропускаем серверную подписку
     if [ "$filename" = "$protected_file" ]; then continue; fi
-
     first_link=$(base64 -d "$f" 2>/dev/null | head -1)
     if [ -z "$first_link" ]; then continue; fi
     email=$(echo "$first_link" | grep -oP '(?<=#)[^|#]+')
     if [ -z "$email" ]; then continue; fi
     echo "${email}=${filename}" >> "$SUBMAP"
 done
-
 echo ""
 echo "Список клиентов:"
-for i in "${!emails[@]}"; do
-    echo "$((i+1)). ${emails[$i]}"
-done
+for i in "${!emails[@]}"; do echo "$((i+1)). ${emails[$i]}"; done
 echo "a. Все пользователи"
 echo ""
 read -p "Выберите: " choice
-
 selected_emails=()
 if [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
     selected_emails=("${emails[@]}")
 elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#emails[@]} )); then
     selected_emails=("${emails[$((choice - 1))]}")
-else
-    echo "Ошибка: неверный выбор."
-    rm -rf "$WORK_DIR"
-    exit 1
-fi
-
+else echo "Ошибка: неверный выбор."; exit 1; fi
 echo ""
 echo "Режим:"
 echo "1. Перезаписать (только ссылки этого сервера)"
 echo "2. Дописать (добавить ссылки к существующим)"
 echo ""
 read -p "Выберите режим (1/2): " mode
-
-if [ "$mode" != "1" ] && [ "$mode" != "2" ]; then
-    echo "Ошибка: выберите 1 или 2."
-    rm -rf "$WORK_DIR"
-    exit 1
-fi
-
+if [ "$mode" != "1" ] && [ "$mode" != "2" ]; then echo "Ошибка: выберите 1 или 2."; exit 1; fi
 existing_files=$(ls "$WORK_DIR"/*.txt 2>/dev/null | xargs -I{} basename {} | sort)
-
 SERVER_IP=$(timeout 3 curl -4 -s icanhazip.com)
-
 for email in "${selected_emails[@]}"; do
     existing_file=$(grep "^${email}=" "$SUBMAP" 2>/dev/null | cut -d= -f2)
     if [ -n "$existing_file" ]; then
@@ -545,46 +439,27 @@ for email in "${selected_emails[@]}"; do
     else
         while true; do
             filename="$(openssl rand -hex 10).txt"
-            # Не допускаем совпадения с серверной подпиской
             if [ "$filename" = "$protected_file" ]; then continue; fi
-            if ! echo "$existing_files" | grep -qx "$filename"; then
-                break
-            fi
+            if ! echo "$existing_files" | grep -qx "$filename"; then break; fi
         done
         echo "${email}=${filename}" >> "$SUBMAP"
         existing_files="${existing_files}\n${filename}"
     fi
-
     new_links=$(/usr/local/bin/_gen_sub "$email" "$SERVER_IP")
-
     if [ "$mode" = "2" ] && [ -f "${WORK_DIR}/${filename}" ]; then
         existing_links=$(base64 -d "${WORK_DIR}/${filename}" 2>/dev/null || echo "")
-        if [ -n "$existing_links" ]; then
-            combined="${existing_links}\n${new_links}"
-        else
-            combined="$new_links"
-        fi
+        if [ -n "$existing_links" ]; then combined="${existing_links}\n${new_links}"; else combined="$new_links"; fi
         echo -e "$combined" | base64 -w 0 > "${WORK_DIR}/${filename}"
     else
         echo -e "$new_links" | base64 -w 0 > "${WORK_DIR}/${filename}"
     fi
 done
-
 git add -A
 git commit -m "update subs" 2>/dev/null
-
 if [ $? -eq 0 ]; then
     git push 2>/dev/null
-    if [ $? -eq 0 ]; then
-        echo ""
-        echo "Подписки обновлены."
-    else
-        echo "Ошибка при пуше."
-    fi
-else
-    echo "Нет изменений для пуша."
-fi
-
+    if [ $? -eq 0 ]; then echo ""; echo "Подписки обновлены."; else echo "Ошибка при пуше."; fi
+else echo "Нет изменений для пуша."; fi
 rm -rf "$WORK_DIR"
 EOF
 chmod +x /usr/local/bin/pushsubs
@@ -594,25 +469,11 @@ cat << 'EOF' > /usr/local/bin/sharesubs
 #!/bin/bash
 REPO_FILE="/usr/local/etc/xray/.repo"
 SUBMAP="/usr/local/etc/xray/.submap"
-
-if [ ! -f "$REPO_FILE" ]; then
-    echo "Репозиторий не настроен. Выполните editrepo."
-    exit 1
-fi
-
-if [ ! -f "$SUBMAP" ] || [ ! -s "$SUBMAP" ]; then
-    echo "Подписки не сгенерированы. Выполните pushsubs."
-    exit 1
-fi
-
+if [ ! -f "$REPO_FILE" ]; then echo "Репозиторий не настроен. Выполните editrepo."; exit 1; fi
+if [ ! -f "$SUBMAP" ] || [ ! -s "$SUBMAP" ]; then echo "Подписки не сгенерированы. Выполните pushsubs."; exit 1; fi
 source "$REPO_FILE"
 mapfile -t entries < "$SUBMAP"
-
-if [[ ${#entries[@]} -eq 0 ]]; then
-    echo "Нет подписок."
-    exit 1
-fi
-
+if [[ ${#entries[@]} -eq 0 ]]; then echo "Нет подписок."; exit 1; fi
 echo ""
 echo "Список клиентов:"
 for i in "${!entries[@]}"; do
@@ -622,27 +483,16 @@ done
 echo "a. Все пользователи"
 echo ""
 read -p "Выберите: " choice
-
 echo ""
 if [ "$choice" = "a" ] || [ "$choice" = "A" ]; then
     for entry in "${entries[@]}"; do
-        email=$(echo "$entry" | cut -d= -f1)
-        filename=$(echo "$entry" | cut -d= -f2)
-        echo "$email:"
-        echo "  ${site_url}/${filename}"
-        echo ""
+        email=$(echo "$entry" | cut -d= -f1); filename=$(echo "$entry" | cut -d= -f2)
+        echo "$email:"; echo "  ${site_url}/${filename}"; echo ""
     done
 elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#entries[@]} )); then
-    entry="${entries[$((choice - 1))]}"
-    email=$(echo "$entry" | cut -d= -f1)
-    filename=$(echo "$entry" | cut -d= -f2)
-    echo "$email:"
-    echo "  ${site_url}/${filename}"
-    echo ""
-else
-    echo "Ошибка: неверный выбор."
-    exit 1
-fi
+    entry="${entries[$((choice - 1))]}"; email=$(echo "$entry" | cut -d= -f1); filename=$(echo "$entry" | cut -d= -f2)
+    echo "$email:"; echo "  ${site_url}/${filename}"; echo ""
+else echo "Ошибка: неверный выбор."; exit 1; fi
 EOF
 chmod +x /usr/local/bin/sharesubs
 
@@ -650,22 +500,11 @@ chmod +x /usr/local/bin/sharesubs
 cat << 'EOF' > /usr/local/bin/newuser
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
-
 read -p "Введите имя пользователя (email): " email
-
-if [[ -z "$email" || "$email" == *" "* ]]; then
-    echo "Имя пользователя не может быть пустым или содержать пробелы."
-    exit 1
-fi
-
+if [[ -z "$email" || "$email" == *" "* ]]; then echo "Имя пользователя не может быть пустым или содержать пробелы."; exit 1; fi
 existing=$(jq --arg email "$email" '.inbounds[0].settings.clients[] | select(.email == $email)' "$CONFIG")
-if [[ -n "$existing" ]]; then
-    echo "Пользователь с таким именем уже существует."
-    exit 1
-fi
-
+if [[ -n "$existing" ]]; then echo "Пользователь с таким именем уже существует."; exit 1; fi
 uuid=$(xray uuid)
-
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
 for (( i=0; i<INBOUND_COUNT; i++ )); do
     network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
@@ -679,7 +518,6 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
            "$CONFIG" > tmp.json && mv tmp.json "$CONFIG"
     fi
 done
-
 systemctl restart xray
 echo "Пользователь $email создан."
 echo "Используйте pushsubs для обновления подписок."
@@ -692,44 +530,23 @@ cat << 'EOF' > /usr/local/bin/rmuser
 CONFIG="/usr/local/etc/xray/config.json"
 REPO_FILE="/usr/local/etc/xray/.repo"
 SUBMAP="/usr/local/etc/xray/.submap"
-
 emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
-
-if [[ ${#emails[@]} -eq 0 ]]; then
-    echo "Нет клиентов для удаления."
-    exit 1
-fi
-
+if [[ ${#emails[@]} -eq 0 ]]; then echo "Нет клиентов для удаления."; exit 1; fi
 echo "Список клиентов:"
-for i in "${!emails[@]}"; do
-    echo "$((i+1)). ${emails[$i]}"
-done
-
+for i in "${!emails[@]}"; do echo "$((i+1)). ${emails[$i]}"; done
 read -p "Введите номер клиента для удаления: " choice
-
-if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#emails[@]} )); then
-    echo "Ошибка: номер должен быть от 1 до ${#emails[@]}"
-    exit 1
-fi
-
+if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#emails[@]} )); then echo "Ошибка: номер должен быть от 1 до ${#emails[@]}"; exit 1; fi
 selected_email="${emails[$((choice - 1))]}"
-
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
 for (( i=0; i<INBOUND_COUNT; i++ )); do
     jq --argjson idx "$i" --arg email "$selected_email" \
        '(.inbounds[$idx].settings.clients) |= map(select(.email != $email))' \
        "$CONFIG" > tmp && mv tmp "$CONFIG"
 done
-
 sub_filename=$(grep "^${selected_email}=" "$SUBMAP" 2>/dev/null | cut -d= -f2)
-
-if [ -f "$SUBMAP" ]; then
-    sed -i "/^${selected_email}=/d" "$SUBMAP"
-fi
-
+if [ -f "$SUBMAP" ]; then sed -i "/^${selected_email}=/d" "$SUBMAP"; fi
 systemctl restart xray
 echo "Клиент $selected_email удалён."
-
 if [ -n "$sub_filename" ] && [ -f "$REPO_FILE" ]; then
     source "$REPO_FILE"
     WORK_DIR="/tmp/xray-subs-work"
@@ -737,12 +554,9 @@ if [ -n "$sub_filename" ] && [ -f "$REPO_FILE" ]; then
     echo "Удаляю подписку из репозитория..."
     git clone "https://x-access-token:${token}@github.com/${repo}.git" "$WORK_DIR" 2>/dev/null
     if [ $? -eq 0 ]; then
-        cd "$WORK_DIR"
-        git config user.email "xray@server"
-        git config user.name "xray"
+        cd "$WORK_DIR"; git config user.email "xray@server"; git config user.name "xray"
         rm -f "${WORK_DIR}/${sub_filename}"
-        git add -A
-        git commit -m "remove $selected_email" 2>/dev/null
+        git add -A; git commit -m "remove $selected_email" 2>/dev/null
         git push 2>/dev/null && echo "Подписка удалена из репозитория."
     fi
     rm -rf "$WORK_DIR"
@@ -755,12 +569,10 @@ cat << 'EOF' > /usr/local/bin/mainuser
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
 KEYS="/usr/local/etc/xray/.keys"
-
 uuid=$(awk -F': ' '/uuid/ {print $2}' "$KEYS")
 pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
 sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
 ip=$(timeout 3 curl -4 -s icanhazip.com)
-
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
 for (( i=0; i<INBOUND_COUNT; i++ )); do
     network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
@@ -768,30 +580,16 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     tag=$(jq -r --argjson idx "$i" '.inbounds[$idx].tag' "$CONFIG")
     sni=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.realitySettings.serverNames[0]' "$CONFIG")
     flow=$(jq -r --argjson idx "$i" '.inbounds[$idx].settings.clients[0].flow // ""' "$CONFIG")
-
-    if [ "$tag" = "vless-ru" ]; then
-        label="RU-прокси"
-    elif [ "$network" = "xhttp" ]; then
-        label="VPN XHTTP"
-    else
-        label="VPN TCP"
-    fi
-
+    if [ "$tag" = "vless-ru" ]; then label="RU-прокси"
+    elif [ "$network" = "xhttp" ]; then label="VPN XHTTP"
+    else label="VPN TCP"; fi
     if [ "$network" = "tcp" ]; then
         link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$ip"
     elif [ "$network" = "xhttp" ]; then
         path=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.xhttpSettings.path' "$CONFIG")
         link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$ip"
-    else
-        continue
-    fi
-
-    echo ""
-    echo "=== $label (порт $port) ==="
-    echo "$link"
-    echo ""
-    echo "QR-код:"
-    echo "$link" | qrencode -t ansiutf8
+    else continue; fi
+    echo ""; echo "=== $label (порт $port) ==="; echo "$link"; echo ""; echo "QR-код:"; echo "$link" | qrencode -t ansiutf8
 done
 EOF
 chmod +x /usr/local/bin/mainuser
@@ -800,16 +598,9 @@ chmod +x /usr/local/bin/mainuser
 cat << 'EOF' > /usr/local/bin/userlist
 #!/bin/bash
 emails=($(jq -r '.inbounds[0].settings.clients[].email' "/usr/local/etc/xray/config.json"))
-
-if [[ ${#emails[@]} -eq 0 ]]; then
-    echo "Список клиентов пуст"
-    exit 1
-fi
-
+if [[ ${#emails[@]} -eq 0 ]]; then echo "Список клиентов пуст"; exit 1; fi
 echo "Список клиентов:"
-for i in "${!emails[@]}"; do
-    echo "$((i+1)). ${emails[$i]}"
-done
+for i in "${!emails[@]}"; do echo "$((i+1)). ${emails[$i]}"; done
 EOF
 chmod +x /usr/local/bin/userlist
 
@@ -818,31 +609,15 @@ cat << 'EOF' > /usr/local/bin/sharelink
 #!/bin/bash
 CONFIG="/usr/local/etc/xray/config.json"
 KEYS="/usr/local/etc/xray/.keys"
-
 emails=($(jq -r '.inbounds[0].settings.clients[].email' "$CONFIG"))
-
-if [[ ${#emails[@]} -eq 0 ]]; then
-    echo "Нет клиентов."
-    exit 1
-fi
-
-for i in "${!emails[@]}"; do
-   echo "$((i + 1)). ${emails[$i]}"
-done
-
+if [[ ${#emails[@]} -eq 0 ]]; then echo "Нет клиентов."; exit 1; fi
+for i in "${!emails[@]}"; do echo "$((i + 1)). ${emails[$i]}"; done
 read -p "Выберите клиента: " client
-
-if ! [[ "$client" =~ ^[0-9]+$ ]] || (( client < 1 || client > ${#emails[@]} )); then
-    echo "Ошибка: номер должен быть от 1 до ${#emails[@]}"
-    exit 1
-fi
-
+if ! [[ "$client" =~ ^[0-9]+$ ]] || (( client < 1 || client > ${#emails[@]} )); then echo "Ошибка: номер должен быть от 1 до ${#emails[@]}"; exit 1; fi
 selected_email="${emails[$((client - 1))]}"
-
 pbk=$(awk -F': ' '/Password/ {print $2}' "$KEYS")
 sid=$(awk -F': ' '/shortsid/ {print $2}' "$KEYS")
 ip=$(timeout 3 curl -4 -s icanhazip.com)
-
 INBOUND_COUNT=$(jq '.inbounds | length' "$CONFIG")
 for (( i=0; i<INBOUND_COUNT; i++ )); do
     network=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.network' "$CONFIG")
@@ -851,39 +626,20 @@ for (( i=0; i<INBOUND_COUNT; i++ )); do
     sni=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.realitySettings.serverNames[0]' "$CONFIG")
     uuid=$(jq -r --argjson idx "$i" --arg email "$selected_email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .id' "$CONFIG")
     flow=$(jq -r --argjson idx "$i" --arg email "$selected_email" '.inbounds[$idx].settings.clients[] | select(.email == $email) | .flow // ""' "$CONFIG")
-
     if [ -z "$uuid" ]; then continue; fi
-
-    if [ "$tag" = "vless-ru" ]; then
-        label="${selected_email}|RU"
-    elif [ "$network" = "xhttp" ]; then
-        label="${selected_email}|VPN|XHTTP"
-    else
-        label="${selected_email}|VPN|TCP"
-    fi
-
+    if [ "$tag" = "vless-ru" ]; then label="${selected_email}|RU"
+    elif [ "$network" = "xhttp" ]; then label="${selected_email}|VPN|XHTTP"
+    else label="${selected_email}|VPN|TCP"; fi
     if [ "$network" = "tcp" ]; then
         link="vless://$uuid@$ip:$port?security=reality&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=/&type=tcp&flow=$flow&encryption=none#$label"
-        if [ "$tag" = "vless-ru" ]; then
-            echo ""
-            echo "=== RU-прокси (порт $port) ==="
-        else
-            echo ""
-            echo "=== VPN TCP (порт $port) ==="
-        fi
+        if [ "$tag" = "vless-ru" ]; then echo ""; echo "=== RU-прокси (порт $port) ==="
+        else echo ""; echo "=== VPN TCP (порт $port) ==="; fi
     elif [ "$network" = "xhttp" ]; then
         path=$(jq -r --argjson idx "$i" '.inbounds[$idx].streamSettings.xhttpSettings.path' "$CONFIG")
         link="vless://$uuid@$ip:$port?security=reality&path=$(echo $path | sed 's|/|%2F|g')&mode=auto&sni=$sni&fp=firefox&pbk=$pbk&sid=$sid&spx=%2F&type=xhttp&encryption=none#$label"
-        echo ""
-        echo "=== VPN XHTTP (порт $port) ==="
-    else
-        continue
-    fi
-
-    echo "$link"
-    echo ""
-    echo "QR-код:"
-    echo "$link" | qrencode -t ansiutf8
+        echo ""; echo "=== VPN XHTTP (порт $port) ==="
+    else continue; fi
+    echo "$link"; echo ""; echo "QR-код:"; echo "$link" | qrencode -t ansiutf8
 done
 EOF
 chmod +x /usr/local/bin/sharelink
@@ -891,27 +647,16 @@ chmod +x /usr/local/bin/sharelink
 # --- Мониторинг Xray + сброс соединений ---
 cat >/usr/local/bin/check_xray.sh <<'EOF'
 #!/bin/bash
-
-# Проверяем активен ли Xray
-if ! systemctl is-active --quiet xray; then
-    systemctl restart xray
-    exit 0
-fi
-
-# Сбрасываем соединения если их слишком много
+if ! systemctl is-active --quiet xray; then systemctl restart xray; exit 0; fi
 CONNS=$(ss -tnp | grep xray | wc -l)
-if [ "$CONNS" -gt 5000 ]; then
-    systemctl restart xray
-fi
+if [ "$CONNS" -gt 5000 ]; then systemctl restart xray; fi
 EOF
-
 chmod +x /usr/local/bin/check_xray.sh
 
 cat >/etc/systemd/system/xray-monitor.service <<'EOF'
 [Unit]
 Description=Мониторинг Xray
 After=network.target
-
 [Service]
 ExecStart=/usr/local/bin/check_xray.sh
 Type=oneshot
@@ -922,12 +667,10 @@ EOF
 cat >/etc/systemd/system/xray-monitor.timer <<'EOF'
 [Unit]
 Description=Проверка состояния Xray каждые 30 секунд
-
 [Timer]
 OnBootSec=10s
 OnUnitActiveSec=30s
 Unit=xray-monitor.service
-
 [Install]
 WantedBy=timers.target
 EOF
@@ -941,13 +684,11 @@ cat >/usr/local/bin/cleanup_disk.sh <<'EOF'
 apt clean
 journalctl --vacuum-size=100M
 EOF
-
 chmod +x /usr/local/bin/cleanup_disk.sh
 
 cat >/etc/systemd/system/cleanup-disk.service <<'EOF'
 [Unit]
 Description=Очистка apt-кэша и журналов
-
 [Service]
 ExecStart=/usr/local/bin/cleanup_disk.sh
 Type=oneshot
@@ -956,11 +697,9 @@ EOF
 cat >/etc/systemd/system/cleanup-disk.timer <<'EOF'
 [Unit]
 Description=Очистка диска раз в 7 дней
-
 [Timer]
 OnBootSec=1h
 OnUnitActiveSec=7d
-
 [Install]
 WantedBy=timers.target
 EOF
@@ -975,6 +714,13 @@ if ! grep -q "^SystemMaxUse=" "$JOURNALD_CONF"; then
     systemctl restart systemd-journald
     echo "Журнал ограничен до 100 МБ."
 fi
+
+# --- Открываем порты UFW ---
+ufw allow 443/tcp
+ufw allow 8443/tcp
+ufw allow 9443/tcp
+ufw reload
+echo "Порты 443, 8443, 9443 открыты."
 
 systemctl restart xray
 
@@ -1015,7 +761,9 @@ cat << 'EOF' > $HOME/help
 
 Маршрутизация (VPN):
     .ru / .рф     → напрямую
-    остальное     → заграничные серверы (балансировщик)
+    остальное     → заграничные серверы (два балансировщика)
+    TCP-клиенты   → балансировщик TCP-серверов
+    XHTTP-клиенты → балансировщик XHTTP-серверов
 
 Конфигурация: /usr/local/etc/xray/config.json
 Перезагрузка:  systemctl restart xray
