@@ -40,8 +40,7 @@ cat << EOF > /usr/local/etc/xray/config.json
             {"type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block"},
             {"type": "field", "protocol": ["bittorrent"], "outboundTag": "block"},
             {"type": "field", "inboundTag": ["vless-ru"], "outboundTag": "direct"},
-            {"type": "field", "inboundTag": ["vless-vpn-tcp", "vless-vpn-xhttp"], "domain": ["geosite:category-ru", "domain:.рф"], "outboundTag": "direct"},
-            {"type": "field", "inboundTag": ["vless-vpn-tcp", "vless-vpn-xhttp"], "ip": ["geoip:ru"], "outboundTag": "direct"}
+            {"type": "field", "inboundTag": ["vless-vpn-tcp", "vless-vpn-xhttp"], "domain": ["geosite:category-ru", "domain:.рф"], "outboundTag": "direct"}
         ]
     },
     "inbounds": [
@@ -280,10 +279,10 @@ OUTBOUND
        --argjson xhttp_sel "[${xhttp_selector}]" \
        --argjson all_sel "[${all_selector}]" '
         .routing.balancers = [
-            {"tag": "balancer-tcp", "selector": $tcp_sel, "strategy": {"type": "leastPing"}},
-            {"tag": "balancer-xhttp", "selector": $xhttp_sel, "strategy": {"type": "leastPing"}}
+            {"tag": "balancer-tcp", "selector": $tcp_sel, "fallbackTag": $tcp_sel[0], "strategy": {"type": "leastPing"}},
+            {"tag": "balancer-xhttp", "selector": $xhttp_sel, "fallbackTag": $xhttp_sel[0], "strategy": {"type": "leastPing"}}
         ] |
-        .observatory = {"subjectSelector": $all_sel, "probeURL": "https://www.google.com/generate_204", "probeInterval": "1m"}
+        .observatory = {"subjectSelector": $all_sel, "probeURL": "https://www.google.com/generate_204", "probeInterval": "10s"}
     ' "$CONFIG" > /tmp/xray_new.json && mv /tmp/xray_new.json "$CONFIG"
 
     # Удаляем старые правила балансировки и добавляем два новых
